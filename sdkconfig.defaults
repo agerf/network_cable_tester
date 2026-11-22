@@ -1,0 +1,14 @@
+# Gemeinsame Basis für Master- und Slave-Build.
+# Das Target wird pro Rolle in sdkconfig.master.defaults / sdkconfig.slave.defaults
+# gesetzt: Master = ESP32-S3, Slave = ESP32 (Classic).
+
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Keine C++-Exceptions/RTTI: passt zu Embedded und hält den Code klein.
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n

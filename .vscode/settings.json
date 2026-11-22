@@ -1,0 +1,45 @@
+{
+  "files.associations": {
+    "*.hpp": "cpp",
+    "sdkconfig": "properties",
+    "sdkconfig.defaults": "properties",
+    "sdkconfig.*.defaults": "properties"
+  },
+  "files.exclude": {
+    "**/build-master": true,
+    "**/build-slave": true,
+    "**/host_tests/build": true
+  },
+  "search.exclude": {
+    "**/build-master": true,
+    "**/build-slave": true,
+    "**/host_tests/build": true
+  },
+  "files.watcherExclude": {
+    "**/build-master/**": true,
+    "**/build-slave/**": true,
+    "**/host_tests/build/**": true
+  },
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build-master/compile_commands.json",
+  "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.errorSquiggles": "enabled",
+  "cmake.configureOnOpen": false,
+  "idf.currentSetup": "/home/agerf/.espressif/v6.1.1/esp-idf",
+  "idf.buildPath": "build-master",
+  "idf.sdkconfigFilePath": "/home/agerf/develop/network_cable_tester/sdkconfig.master",
+  "idf.flashType": "UART",
+  "idf.monitorBaudRate": "115200",
+  "idf.extensionActivationMode": "always",
+  "idf.showOnboardingOnInit": false,
+  "terminal.integrated.profiles.linux": {
+    "ESP-IDF": {
+      "path": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && exec /usr/bin/bash"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.linux": "ESP-IDF"
+}

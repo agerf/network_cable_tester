@@ -1,0 +1,17 @@
+menu "Cable Tester"
+
+    choice CABLE_TESTER_ROLE
+        prompt "Node role"
+        default CABLE_TESTER_ROLE_MASTER
+        help
+            Master: WLAN-Access-Point, Web-UI und Test-Steuerung.
+            Slave: ESP-NOW-Messknoten am anderen Kabelende.
+            Pro Board einen eigenen Build flashen (siehe scripts/idf_role.sh).
+
+        config CABLE_TESTER_ROLE_MASTER
+            bool "Master (WLAN-AP + Web-UI)"
+        config CABLE_TESTER_ROLE_SLAVE
+            bool "Slave (ESP-NOW-Messknoten)"
+    endchoice
+
+endmenu

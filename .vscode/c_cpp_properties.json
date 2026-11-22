@@ -1,0 +1,25 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "ESP32 Master",
+      "compileCommands": "${workspaceFolder}/build-master/compile_commands.json",
+      "compilerPath": "/home/agerf/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
+      "intelliSenseMode": "linux-gcc-x64"
+    },
+    {
+      "name": "ESP32 Slave",
+      "compileCommands": "${workspaceFolder}/build-slave/compile_commands.json",
+      "compilerPath": "/home/agerf/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc",
+      "intelliSenseMode": "linux-gcc-x64"
+    },
+    {
+      "name": "Host Tests",
+      "compileCommands": "${workspaceFolder}/host_tests/build/compile_commands.json",
+      "compilerPath": "/usr/bin/g++",
+      "intelliSenseMode": "linux-gcc-x64",
+      "cStandard": "gnu17",
+      "cppStandard": "gnu++20"
+    }
+  ]
+}

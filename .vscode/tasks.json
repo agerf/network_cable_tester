@@ -1,0 +1,118 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "portMaster",
+      "type": "promptString",
+      "description": "Serieller Port des Masters (ESP32-S3: /dev/ttyUSB0 UART-Bridge oder /dev/ttyACM0 nativer USB)",
+      "default": "/dev/ttyUSB0"
+    },
+    {
+      "id": "portSlave",
+      "type": "promptString",
+      "description": "Serieller Port des Slaves (ESP32-Classic, meist /dev/ttyUSB1)",
+      "default": "/dev/ttyUSB1"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "ESP-IDF: Master bauen",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && cd \"${workspaceFolder}\" && scripts/idf_role.sh master build"
+      ],
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false }
+    },
+    {
+      "label": "ESP-IDF: Slave bauen",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && cd \"${workspaceFolder}\" && scripts/idf_role.sh slave build"
+      ],
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false }
+    },
+    {
+      "label": "ESP-IDF: Beide Rollen bauen",
+      "dependsOn": ["ESP-IDF: Master bauen", "ESP-IDF: Slave bauen"],
+      "dependsOrder": "sequence",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP-IDF: Master flashen",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && cd \"${workspaceFolder}\" && scripts/idf_role.sh master flash -p \"${input:portMaster}\""
+      ],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "ESP-IDF: Slave flashen",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && cd \"${workspaceFolder}\" && scripts/idf_role.sh slave flash -p \"${input:portSlave}\""
+      ],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "ESP-IDF: Master Monitor",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && cd \"${workspaceFolder}\" && scripts/idf_role.sh master monitor -p \"${input:portMaster}\""
+      ],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "ESP-IDF: Slave Monitor",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.espressif/tools/activate_idf_v6.1.1.sh\" && cd \"${workspaceFolder}\" && scripts/idf_role.sh slave monitor -p \"${input:portSlave}\""
+      ],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Host-Tests: bauen und ausführen",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "cd \"${workspaceFolder}\" && cmake -S host_tests -B host_tests/build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build host_tests/build && ctest --test-dir host_tests/build --output-on-failure"
+      ],
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Host-Tests: nur ausführen",
+      "type": "shell",
+      "command": "/usr/bin/bash",
+      "args": [
+        "-c",
+        "cd \"${workspaceFolder}\" && ctest --test-dir host_tests/build --output-on-failure"
+      ],
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    }
+  ]
+}

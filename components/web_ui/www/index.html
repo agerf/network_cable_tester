@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RJ45 Kabeltester</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #232322;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --hairline: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --accent-solid: #256abf;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --page: #f9f9f7;
+      --surface: #fcfcfb;
+      --surface-2: #f2f1ed;
+      --ink: #0b0b0b;
+      --ink-2: #52514e;
+      --muted: #898781;
+      --hairline: #e1e0d9;
+      --border: rgba(11, 11, 11, 0.10);
+      --accent: #2a78d6;
+      --accent-solid: #1c5cab;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  h1, h2, h3 { margin: 0; line-height: 1.2; }
+  h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+  h3 { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+  p { margin: 0; }
+  .topbar {
+    max-width: 1080px; margin: 0 auto; padding: 20px 20px 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 12px;
+    display: grid; place-items: center; font-size: 20px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--accent);
+  }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    min-height: 34px; padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--ink-2); font-size: 13px; white-space: nowrap;
+  }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .chip.ok .status-dot { background: var(--good); }
+  .chip.bad .status-dot { background: var(--critical); }
+  .chip.busy .status-dot { background: var(--warning); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  main { max-width: 1080px; margin: 0 auto; padding: 12px 20px 28px; display: grid; gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 20px;
+  }
+  .hero-card {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 20px; flex-wrap: wrap;
+  }
+  .hero-card > .banner { flex: 1 0 100%; margin-top: 0; }
+  .eyebrow {
+    color: var(--muted); font-size: 11.5px; font-weight: 650;
+    letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 6px;
+  }
+  .muted { color: var(--ink-2); }
+  .note { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  .primary {
+    flex: 0 0 auto; min-height: 46px; padding: 0 22px;
+    border: 0; border-radius: 10px; cursor: pointer;
+    background: var(--accent-solid); color: #fff;
+    font: inherit; font-weight: 650;
+  }
+  .primary:hover:not(:disabled) { filter: brightness(1.08); }
+  .primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+    vertical-align: -2px; border: 2px solid rgba(255,255,255,0.45);
+    border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .banner { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px; }
+  .banner.error { border: 1px solid var(--critical); color: var(--ink); }
+  #result { display: grid; gap: 16px; }
+  #result[hidden] { display: none; }
+  .verdict { display: flex; align-items: center; gap: 16px; border-left: 4px solid var(--muted); }
+  .verdict.good { border-left-color: var(--good); }
+  .verdict.warning { border-left-color: var(--warning); }
+  .verdict.critical { border-left-color: var(--critical); }
+  .verdict-icon {
+    flex: 0 0 auto; width: 48px; height: 48px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 22px; font-weight: 700;
+    background: var(--surface-2); color: var(--ink);
+  }
+  .verdict.good .verdict-icon { color: var(--good); }
+  .verdict.warning .verdict-icon { color: var(--warning); }
+  .verdict.critical .verdict-icon { color: var(--critical); }
+  .verdict-text { min-width: 0; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+  .wiring svg { width: 100%; height: auto; display: block; }
+  .wiring .wire { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
+  .wiring .wire.short { stroke: var(--warning); stroke-width: 2.5; }
+  .wiring .wire.open { stroke: var(--critical); stroke-dasharray: 4 4; }
+  .wiring .pin { fill: var(--surface-2); stroke: var(--hairline); }
+  .wiring .pin-label { fill: var(--ink); font-size: 11px; font-weight: 600; }
+  .wiring .col-label { fill: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; }
+  .wiring .flag-ring { fill: none; stroke: var(--warning); stroke-width: 2; }
+  .wiring .open-mark { stroke: var(--critical); stroke-width: 2; stroke-linecap: round; }
+  .table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+  .matrix { border-collapse: collapse; margin-top: 8px; }
+  .matrix th { color: var(--muted); font-size: 11.5px; font-weight: 600; padding: 4px 6px; }
+  .matrix tbody th { text-align: right; padding-right: 10px; color: var(--ink-2); }
+  .matrix td {
+    width: 30px; height: 30px; padding: 0; text-align: center;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .matrix tbody tr:hover { background: var(--surface-2); }
+  .matrix .dot {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); vertical-align: middle;
+  }
+  .matrix .flag { margin-left: 4px; font-weight: 700; font-size: 12px; }
+  .matrix tr.row-short > th:first-child { color: var(--warning); }
+  .matrix tr.row-open > th:first-child { color: var(--critical); }
+  .diag { display: grid; grid-template-columns: max-content 1fr; gap: 10px 16px; margin: 12px 0 0; }
+  .diag dt { color: var(--muted); white-space: nowrap; }
+  .diag dd { margin: 0; color: var(--ink); }
+  .diag-icon { display: inline-block; width: 18px; font-weight: 700; }
+  .diag-icon.good { color: var(--good); }
+  .diag-icon.warning { color: var(--warning); }
+  .diag-icon.critical { color: var(--critical); }
+  .badge {
+    display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted);
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    vertical-align: 1px;
+  }
+  .lengths { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  .lengths th, .lengths td { padding: 7px 0; border-bottom: 1px solid var(--hairline); text-align: left; }
+  .lengths th { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .lengths th.num, .lengths td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .raw summary { cursor: pointer; color: var(--ink-2); font-weight: 600; }
+  .raw pre {
+    margin: 12px 0 0; padding: 12px; border-radius: 10px; overflow: auto;
+    background: var(--page); border: 1px solid var(--border);
+    font-size: 12px; line-height: 1.45;
+  }
+  .foot { max-width: 1080px; margin: 0 auto; padding: 0 20px 32px; color: var(--muted); font-size: 12.5px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">⇄</span>
+    <div>
+      <h1>RJ45 Kabeltester</h1>
+      <p class="sub">Node A · Master</p>
+    </div>
+  </div>
+  <div id="statusChip" class="chip" role="status" aria-live="polite">
+    <span class="status-dot" aria-hidden="true"></span>
+    <span id="statusText">Verbinde …</span>
+  </div>
+</header>
+
+<main>
+  <section class="card hero-card">
+    <div>
+      <p class="eyebrow">Kabelprüfung</p>
+      <h2>Beide Enden einstecken, dann testen.</h2>
+      <p class="muted" style="margin-top:6px">Der Slave misst am gegenüberliegenden Ende. Der Test dauert nur wenige Sekunden.</p>
+      <p class="note" style="margin-top:4px">Wichtig: Beide Tester brauchen eine gemeinsame Masse (z. B. beide USB-Kabel am selben Rechner oder Hub).</p>
+    </div>
+    <button id="runBtn" class="primary" type="button" disabled>Kabel testen</button>
+    <p id="errorBanner" class="banner error" role="alert" hidden></p>
+  </section>
+
+  <section id="result" hidden aria-live="polite">
+    <div id="verdict" class="card verdict">
+      <div id="verdictIcon" class="verdict-icon" aria-hidden="true">✓</div>
+      <div class="verdict-text">
+        <p class="eyebrow">Ergebnis</p>
+        <h2 id="kindLabel">–</h2>
+        <p id="verdictDetail" class="muted">–</p>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <section class="card">
+        <h3>Verdrahtung</h3>
+        <div id="wiring" class="wiring"></div>
+        <p class="note">Durchgezogen = gemessene Verbindung · gestrichelt = offen · gelb = an einem Kurzschluss beteiligt.</p>
+      </section>
+      <section class="card">
+        <h3>Messmatrix</h3>
+        <div class="table-wrap">
+          <table id="matrix" class="matrix">
+            <caption class="sr-only">Messmatrix: Zeilen sind getriebene Adern an Node A, Spalten sind gelesene HIGH-Pegel an Node B.</caption>
+          </table>
+        </div>
+        <p class="note">Zeile: getriebene Ader an A · Spalte: HIGH gelesen an B.</p>
+      </section>
+    </div>
+
+    <div class="two-col">
+      <section class="card">
+        <h3>Diagnose</h3>
+        <dl id="diagnostics" class="diag"></dl>
+      </section>
+      <section class="card">
+        <h3>Längen <span class="badge">experimentell</span></h3>
+        <table id="lengths" class="lengths"></table>
+        <p id="lengthStatus" class="note" hidden></p>
+        <p class="note">Schätzung über die Leitungskapazität; typische Abweichung ±20–30 %. Nur bei elektrisch sauberer Verdrahtung gemessen.</p>
+      </section>
+    </div>
+
+    <details class="card raw">
+      <summary>Rohdaten (JSON)</summary>
+      <pre id="raw"></pre>
+    </details>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>Hinweis: T568A und T568B sind elektrisch identisch (gleiche Paar-Pin-Zuordnung) – ein Kontinuitätstester kann sie nicht unterscheiden. Erkannt werden 1:1, Crossover, offene Adern, Kurzschlüsse und abweichende Belegungen.</p>
+</footer>
+
+<script>
+(() => {
+  'use strict';
+
+  const byId = (id) => document.getElementById(id);
+  const runBtn = byId('runBtn');
+  const errorBanner = byId('errorBanner');
+  const statusChip = byId('statusChip');
+  const statusText = byId('statusText');
+
+  let paired = false;
+  let busy = false;
+  let running = false;
+  let lastRssi = null;
+
+  async function getJSON(url, options) {
+    const response = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch (_) { /* ignore */ }
+    }
+    if (!response.ok) {
+      throw new Error((data && data.error) || ('HTTP ' + response.status));
+    }
+    if (!data) {
+      throw new Error('Leere Antwort vom Tester');
+    }
+    return data;
+  }
+
+  function setError(message) {
+    if (!message) {
+      errorBanner.hidden = true;
+      errorBanner.textContent = '';
+    } else {
+      errorBanner.hidden = false;
+      errorBanner.textContent = message;
+    }
+  }
+
+  function renderStatus() {
+    statusChip.classList.remove('ok', 'bad', 'busy');
+    if (running || busy) {
+      statusChip.classList.add('busy');
+      statusText.textContent = 'Test läuft …';
+      runBtn.disabled = true;
+      if (!running) {
+        runBtn.textContent = 'Test läuft …';
+      }
+      return;
+    }
+    if (paired) {
+      statusChip.classList.add('ok');
+      statusText.textContent = lastRssi === null || lastRssi === undefined
+        ? 'Slave verbunden'
+        : 'Slave verbunden · ' + lastRssi + ' dBm';
+    } else {
+      statusChip.classList.add('bad');
+      statusText.textContent = 'Slave getrennt';
+    }
+    runBtn.disabled = !paired;
+    runBtn.textContent = 'Kabel testen';
+  }
+
+  async function refreshStatus() {
+    if (running) {
+      return;
+    }
+    try {
+      const status = await getJSON('/api/status');
+      paired = Boolean(status.paired);
+      busy = Boolean(status.busy);
+      lastRssi = typeof status.rssi === 'number' ? status.rssi : null;
+    } catch (_) {
+      paired = false;
+      busy = false;
+      lastRssi = null;
+    }
+    renderStatus();
+  }
+
+  function bits(mask) {
+    const result = [];
+    for (let i = 0; i < 8; i += 1) {
+      if (mask & (1 << i)) {
+        result.push(i);
+      }
+    }
+    return result;
+  }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function svgNode(name, attrs) {
+    const node = document.createElementNS(SVG_NS, name);
+    if (attrs) {
+      Object.keys(attrs).forEach((key) => node.setAttribute(key, attrs[key]));
+    }
+    return node;
+  }
+
+  function svgText(x, y, text, className) {
+    const node = svgNode('text', { x: x, y: y, class: className, 'text-anchor': 'middle', 'dominant-baseline': 'central' });
+    node.textContent = text;
+    return node;
+  }
+
+  function renderWiring(report) {
+    const host = byId('wiring');
+    host.replaceChildren();
+
+    const width = 360;
+    const height = 330;
+    const leftX = 72;
+    const rightX = 288;
+    const top = 38;
+    const step = 36;
+
+    const svg = svgNode('svg', {
+      viewBox: '0 0 ' + width + ' ' + height,
+      role: 'img',
+      'aria-label': 'Verdrahtungsplan zwischen Node A und Node B'
+    });
+
+    svg.appendChild(svgText(leftX, 12, 'A', 'col-label'));
+    svg.appendChild(svgText(rightX, 12, 'B', 'col-label'));
+
+    const shortPins = new Set();
+    report.shorts.forEach((pair) => {
+      shortPins.add(pair[0]);
+      shortPins.add(pair[1]);
+    });
+
+    report.rounds.forEach((round, driven) => {
+      const y1 = top + driven * step;
+      const remote = bits(round.remoteMask);
+      const localShort = bits(round.localMask).filter((line) => line !== driven);
+
+      if (remote.length === 0) {
+        const path = svgNode('path', {
+          d: 'M ' + (leftX + 11) + ' ' + y1 + ' L ' + (leftX + 46) + ' ' + y1,
+          class: 'wire open'
+        });
+        const title = svgNode('title');
+        title.textContent = 'A' + (driven + 1) + ': offen';
+        path.appendChild(title);
+        svg.appendChild(path);
+
+        const mark = svgNode('path', {
+          d: 'M ' + (leftX + 48) + ' ' + (y1 - 5) + ' L ' + (leftX + 58) + ' ' + (y1 + 5) +
+             ' M ' + (leftX + 58) + ' ' + (y1 - 5) + ' L ' + (leftX + 48) + ' ' + (y1 + 5),
+          class: 'open-mark'
+        });
+        svg.appendChild(mark);
+      } else {
+        remote.forEach((target) => {
+          const y2 = top + target * step;
+          const path = svgNode('path', {
+            d: 'M ' + (leftX + 11) + ' ' + y1 +
+               ' C ' + (leftX + 62) + ' ' + y1 + ', ' + (rightX - 62) + ' ' + y2 +
+               ', ' + (rightX - 11) + ' ' + y2,
+            class: remote.length > 1 ? 'wire short' : 'wire'
+          });
+          const title = svgNode('title');
+          title.textContent = 'A' + (driven + 1) + ' → B' + (target + 1);
+          path.appendChild(title);
+          svg.appendChild(path);
+        });
+      }
+
+      if (localShort.length > 0) {
+        const ring = svgNode('circle', { cx: leftX, cy: y1, r: 15, class: 'flag-ring' });
+        const title = svgNode('title');
+        title.textContent = 'A' + (driven + 1) + ' lokal kurzgeschlossen';
+        ring.appendChild(title);
+        svg.appendChild(ring);
+      }
+    });
+
+    for (let line = 0; line < 8; line += 1) {
+      const y = top + line * step;
+      [leftX, rightX].forEach((x) => {
+        const circle = svgNode('circle', { cx: x, cy: y, r: 11, class: 'pin' });
+        svg.appendChild(circle);
+        svg.appendChild(svgText(x, y, String(line + 1), 'pin-label'));
+      });
+      if (shortPins.has(line)) {
+        [leftX, rightX].forEach((x) => {
+          svg.appendChild(svgNode('circle', { cx: x, cy: y, r: 15, class: 'flag-ring' }));
+        });
+      }
+    }
+
+    host.appendChild(svg);
+  }
+
+  function renderMatrix(report) {
+    const table = byId('matrix');
+    const caption = table.querySelector('caption');
+    table.replaceChildren();
+    if (caption) {
+      table.appendChild(caption);
+    }
+
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    headRow.appendChild(document.createElement('th'));
+    for (let column = 0; column < 8; column += 1) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = 'B' + (column + 1);
+      headRow.appendChild(th);
+    }
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement('tbody');
+    report.rounds.forEach((round, driven) => {
+      const remote = bits(round.remoteMask);
+      const localShort = bits(round.localMask).filter((line) => line !== driven);
+      const row = document.createElement('tr');
+      if (remote.length === 0) {
+        row.className = 'row-open';
+      } else if (remote.length > 1 || localShort.length > 0) {
+        row.className = 'row-short';
+      }
+
+      const rowHead = document.createElement('th');
+      rowHead.scope = 'row';
+      rowHead.textContent = 'A' + (driven + 1);
+      if (remote.length === 0) {
+        const flag = document.createElement('span');
+        flag.className = 'flag';
+        flag.textContent = '×';
+        flag.title = 'Keine Verbindung';
+        flag.setAttribute('aria-label', 'keine Verbindung');
+        rowHead.appendChild(flag);
+      } else if (remote.length > 1) {
+        const flag = document.createElement('span');
+        flag.className = 'flag';
+        flag.textContent = '!';
+        flag.title = 'Mehrere HIGH-Pegel: Kurzschluss';
+        flag.setAttribute('aria-label', 'Kurzschluss');
+        rowHead.appendChild(flag);
+      } else if (localShort.length > 0) {
+        const flag = document.createElement('span');
+        flag.className = 'flag';
+        flag.textContent = '!';
+        flag.title = 'Kurzschluss auf der A-Seite';
+        flag.setAttribute('aria-label', 'Kurzschluss auf der A-Seite');
+        rowHead.appendChild(flag);
+      }
+      row.appendChild(rowHead);
+
+      for (let column = 0; column < 8; column += 1) {
+        const cell = document.createElement('td');
+        if (remote.includes(column)) {
+          const dot = document.createElement('span');
+          dot.className = 'dot';
+          cell.appendChild(dot);
+          cell.title = 'A' + (driven + 1) + ' → B' + (column + 1) + ': HIGH';
+          cell.setAttribute('aria-label', cell.title);
+        } else {
+          cell.title = 'A' + (driven + 1) + ' → B' + (column + 1) + ': LOW';
+        }
+        row.appendChild(cell);
+      }
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+  }
+
+  function addDiag(host, label, value, tone) {
+    const dt = document.createElement('dt');
+    const icon = document.createElement('span');
+    icon.className = 'diag-icon ' + tone;
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = tone === 'good' ? '✓' : (tone === 'warning' ? '!' : '×');
+    dt.appendChild(icon);
+    dt.appendChild(document.createTextNode(label));
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    host.appendChild(dt);
+    host.appendChild(dd);
+  }
+
+  function renderDiagnostics(report) {
+    const host = byId('diagnostics');
+    host.replaceChildren();
+
+    if (report.shorts.length === 0) {
+      addDiag(host, 'Kurzschlüsse', 'keine', 'good');
+    } else {
+      const text = report.shorts.map((pair) => 'Ader ' + (pair[0] + 1) + ' ↔ ' + (pair[1] + 1)).join(', ');
+      addDiag(host, 'Kurzschlüsse', text, 'warning');
+    }
+
+    if (report.opens.length === 0) {
+      addDiag(host, 'Unterbrechungen', 'keine', 'good');
+    } else {
+      const text = report.opens.map((line) => 'Ader ' + (line + 1)).join(', ');
+      addDiag(host, 'Unterbrechungen', text, 'critical');
+    }
+
+    addDiag(host, 'Ruhezustand',
+      report.idleActivity ? 'HIGH ohne Ansteuerung erkannt' : 'alle Leitungen LOW',
+      report.idleActivity ? 'warning' : 'good');
+
+    const connections = report.rounds.reduce((sum, round) => sum + bits(round.remoteMask).length, 0);
+    addDiag(host, 'Verbindungen', connections + ' gemessene Aderverbindungen', 'good');
+  }
+
+  function formatMeters(value) {
+    if (typeof value !== 'number' || !isFinite(value)) {
+      return '–';
+    }
+    return value.toFixed(1).replace('.', ',') + ' m';
+  }
+
+  function renderLengths(report) {
+    const table = byId('lengths');
+    table.replaceChildren();
+
+    const pairs = [[0, 1], [2, 5], [3, 4], [6, 7]];
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Paar', 'Länge'].forEach((label, index) => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      if (index === 1) {
+        th.className = 'num';
+      }
+      headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement('tbody');
+    let measured = 0;
+    pairs.forEach((pair) => {
+      const values = pair.map((line) => report.lengthM[line]).filter((value) => typeof value === 'number' && isFinite(value));
+      const average = values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
+      if (average !== null) {
+        measured += 1;
+      }
+      const row = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = 'Ader ' + (pair[0] + 1) + '–' + (pair[1] + 1);
+      const value = document.createElement('td');
+      value.className = 'num';
+      value.textContent = average === null ? '–' : formatMeters(average);
+      row.appendChild(name);
+      row.appendChild(value);
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+
+    const status = byId('lengthStatus');
+    if (measured === 0) {
+      status.hidden = false;
+      status.textContent = 'Keine Längenmessung (Kabel fehlerhaft oder Messung nicht möglich).';
+    } else {
+      status.hidden = true;
+      status.textContent = '';
+    }
+  }
+
+  function renderReport(report) {
+    const verdict = byId('verdict');
+    const icon = byId('verdictIcon');
+    verdict.classList.remove('good', 'warning', 'critical');
+
+    let tone = 'good';
+    let iconText = '✓';
+    if (report.kind === 'custom') {
+      tone = 'warning';
+      iconText = '!';
+    } else if (report.kind === 'faulty') {
+      tone = 'critical';
+      iconText = '×';
+    } else if (report.kind === 'unknown') {
+      tone = 'warning';
+      iconText = '?';
+    }
+    verdict.classList.add(tone);
+    icon.textContent = iconText;
+    byId('kindLabel').textContent = report.kindLabel;
+
+    const openCount = report.opens.length;
+    const shortCount = report.shorts.length;
+    const connections = report.rounds.reduce((sum, round) => sum + bits(round.remoteMask).length, 0);
+    let detail = '';
+    if (report.kind === 'straight') {
+      detail = 'Alle 8 Adern sind 1:1 verbunden.';
+    } else if (report.kind === 'crossover') {
+      detail = 'Alle Adern verbunden, die Paare sind getauscht.';
+    } else if (report.kind === 'custom') {
+      detail = 'Elektrisch durchgängig, aber unübliche Belegung.';
+    } else if (report.kind === 'faulty') {
+      if (openCount === 8) {
+        detail = 'Alle 8 Adern offen – kein Kabel gesteckt oder keine gemeinsame Masse zwischen den Testern.';
+      } else if (openCount > 0 || shortCount > 0) {
+        detail = openCount + ' Unterbrechung(en), ' + shortCount + ' Kurzschluss(pärchen) · ' +
+          connections + ' Verbindungen gemessen.';
+      } else {
+        detail = 'Belegung nicht eindeutig (Mehrfachverbindung oder Abweichung).';
+      }
+    }
+    if (report.idleActivity) {
+      detail += ' Fremdspannung im Ruhezustand erkannt.';
+    }
+    byId('verdictDetail').textContent = detail;
+
+    renderWiring(report);
+    renderMatrix(report);
+    renderDiagnostics(report);
+    renderLengths(report);
+    byId('raw').textContent = JSON.stringify(report, null, 2);
+    byId('result').hidden = false;
+  }
+
+  async function runTest() {
+    if (running) {
+      return;
+    }
+    running = true;
+    setError('');
+    runBtn.disabled = true;
+    runBtn.replaceChildren();
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    runBtn.appendChild(spinner);
+    runBtn.appendChild(document.createTextNode('Test läuft …'));
+    renderStatus();
+
+    try {
+      const report = await getJSON('/api/test', { method: 'POST' });
+      renderReport(report);
+    } catch (error) {
+      setError(error.message || 'Test fehlgeschlagen');
+    } finally {
+      running = false;
+      await refreshStatus();
+    }
+  }
+
+  runBtn.addEventListener('click', runTest);
+  refreshStatus();
+  setInterval(refreshStatus, 3000);
+})();
+</script>
+</body>
+</html>
