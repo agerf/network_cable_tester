@@ -5,12 +5,15 @@
 #if CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 #include "cable_link/master_link.hpp"
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "ili9488.hpp"
 #include "lvgl.h"
 #include "test_runner/test_runner.hpp"
@@ -43,9 +46,11 @@ private:
     // Feste Display-Seiten statt eines Scroll-Containers.
     static constexpr int kPageTest = 0;
     static constexpr int kPageResult = 1;
-    static constexpr int kPageWiring = 2;
-    static constexpr int kPageMatrix = 3;
-    static constexpr int kPageCount = 4;
+    static constexpr int kPageSoak = 2;
+    static constexpr int kPageTools = 3;
+    static constexpr int kPageWiring = 4;
+    static constexpr int kPageMatrix = 5;
+    static constexpr int kPageCount = 6;
 
     static void task_entry(void* arg);
     void task_loop();
@@ -56,13 +61,18 @@ private:
     void build_nav(lv_obj_t* screen);
     void build_test_page(lv_obj_t* page);
     void build_result_page(lv_obj_t* page);
+    void build_soak_page(lv_obj_t* page);
+    void build_tools_page(lv_obj_t* page);
     void build_wiring_page(lv_obj_t* page);
     void build_matrix_page(lv_obj_t* page);
     void show_page(int page);
     void show_matrix_view(bool raw);
+    void show_tools_view(int view);
     void update_status();
+    void update_tools();
     void refresh_result();
     void run_requested_test();
+    void start_soak();
     void apply_result(const TestResult& result);
     void show_error(const char* message);
     void hide_error();
@@ -71,6 +81,7 @@ private:
     void rebuild_matrix();
     void rebuild_diagnostics();
     void rebuild_lengths();
+    void rebuild_soak();
     void rebuild_raw();
 
     lv_obj_t* make_page(lv_obj_t* parent);
@@ -87,6 +98,17 @@ private:
     static void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
     void read_touch(lv_indev_data_t* data);
     static void test_button_cb(lv_event_t* event);
+    static void soak_button_cb(lv_event_t* event);
+    static void soak_task_entry(void* arg);
+    static void tools_view_cb(lv_event_t* event);
+    static void tone_button_cb(lv_event_t* event);
+    static void tone_freq_minus_cb(lv_event_t* event);
+    static void tone_freq_plus_cb(lv_event_t* event);
+    static void tone_toggle_cb(lv_event_t* event);
+    static void length_cal_button_cb(lv_event_t* event);
+    static void length_cal_reset_cb(lv_event_t* event);
+    static void cal_ref_minus_cb(lv_event_t* event);
+    static void cal_ref_plus_cb(lv_event_t* event);
     static void calibration_button_cb(lv_event_t* event);
     static void tab_button_cb(lv_event_t* event);
     static void view_toggle_cb(lv_event_t* event);
@@ -126,7 +148,10 @@ private:
     lv_obj_t* status_label_{nullptr};
     lv_obj_t* test_btn_{nullptr};
     lv_obj_t* test_btn_label_{nullptr};
+    lv_obj_t* soak_btn_{nullptr};
+    lv_obj_t* soak_btn_label_{nullptr};
     lv_obj_t* error_label_{nullptr};
+    lv_obj_t* tools_row_{nullptr};
     lv_obj_t* cal_btn_{nullptr};
     lv_obj_t* footer_label_{nullptr};
     lv_obj_t* verdict_card_{nullptr};
@@ -141,6 +166,40 @@ private:
     lv_obj_t* raw_label_{nullptr};
     lv_obj_t* diag_area_{nullptr};
     lv_obj_t* length_area_{nullptr};
+    lv_obj_t* soak_verdict_{nullptr};
+    lv_obj_t* soak_area_{nullptr};
+    std::array<lv_obj_t*, cable_test::kLineCount> soak_line_labels_{};
+    lv_obj_t* tone_view_{nullptr};
+    lv_obj_t* cal_view_{nullptr};
+    lv_obj_t* tone_freq_label_{nullptr};
+    lv_obj_t* tone_toggle_btn_{nullptr};
+    lv_obj_t* tone_toggle_label_{nullptr};
+    lv_obj_t* tone_status_{nullptr};
+    lv_obj_t* cal_ref_label_{nullptr};
+    lv_obj_t* length_cal_btn_{nullptr};
+    lv_obj_t* length_cal_reset_btn_{nullptr};
+    lv_obj_t* cal_status_{nullptr};
+    lv_obj_t* cal_scale_label_{nullptr};
+
+    struct ToneButton {
+        DisplayUi* self{nullptr};
+        std::size_t line{0};
+        lv_obj_t* button{nullptr};
+        lv_obj_t* label{nullptr};
+    };
+    std::array<ToneButton, cable_test::kLineCount> tone_buttons_{};
+
+    struct ToolViewTab {
+        DisplayUi* self{nullptr};
+        int view{0};
+        lv_obj_t* button{nullptr};
+        lv_obj_t* label{nullptr};
+    };
+    std::array<ToolViewTab, 2> tool_tabs_{};
+    int tools_view_{0};
+    std::size_t tone_selected_line_{0};
+    std::uint32_t tone_freq_hz_{1000};
+    double cal_reference_m_{10.0};
 
     struct TabButton {
         DisplayUi* self{nullptr};
@@ -180,6 +239,14 @@ private:
     bool testing_{false};
     bool test_requested_{false};
     bool calibration_requested_{false};
+
+    cable_test::SoakSummary soak_summary_{};
+    TestResult soak_result_{};
+    TaskHandle_t soak_task_{nullptr};
+    std::atomic<bool> soak_done_{false};
+    esp_err_t soak_err_{ESP_OK};
+    bool soaking_{false};
+    bool soak_requested_{false};
 
     bool last_paired_{false};
     bool last_busy_{false};

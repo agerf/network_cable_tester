@@ -42,6 +42,10 @@ struct TestData {
     LineMask idle_remote_mask{0};
     // Optionale, experimentelle Längenschätzung pro Ader (Meter).
     std::array<std::optional<double>, kLineCount> length_m{};
+    // Optionale ADC-Spannung an einer kurzgeschlossenen Ader (Volt),
+    // gemessen über den internen Pull-up. Nur für die Grobklassifikation
+    // hart/weich; die Pull-up-Toleranz macht den Wert experimentell.
+    std::array<std::optional<double>, kLineCount> short_voltage_v{};
 };
 
 enum class CableKind : std::uint8_t {
@@ -52,19 +56,34 @@ enum class CableKind : std::uint8_t {
     Faulty,
 };
 
+enum class ShortQuality : std::uint8_t {
+    Unknown = 0,
+    Hard,
+    Resistive,
+};
+
 struct Analysis {
     CableKind kind{CableKind::Unknown};
     std::array<std::optional<LineIndex>, kLineCount> mapping{};
     std::array<std::array<bool, kLineCount>, kLineCount> short_between{};
     std::array<bool, kLineCount> open{};
+    // Geschätzte Entfernung vom Master bis zur Unterbrechung (Meter).
+    // Nur gesetzt, wenn die Ader offen ist und eine Kapazitätsmessung
+    // vorliegt. Bewusst experimentell (±20–30 %).
+    std::array<std::optional<double>, kLineCount> open_distance_m{};
+    // Grobklassifikation der an einem Kurzschluss beteiligten Adern.
+    std::array<ShortQuality, kLineCount> short_quality{};
     bool idle_activity{false};
 };
 
 [[nodiscard]] Analysis analyze(const TestData& data) noexcept;
 [[nodiscard]] bool any_short(const Analysis& analysis) noexcept;
 [[nodiscard]] bool any_open(const Analysis& analysis) noexcept;
+[[nodiscard]] bool line_shorted(const Analysis& analysis, std::size_t line) noexcept;
+[[nodiscard]] std::size_t open_count(const Analysis& analysis) noexcept;
 
 // Stabile, maschinenlesbare Bezeichnung (für JSON).
 [[nodiscard]] const char* kind_name(CableKind kind) noexcept;
+[[nodiscard]] const char* short_quality_name(ShortQuality quality) noexcept;
 
 } // namespace cable_test

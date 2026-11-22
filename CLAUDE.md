@@ -23,7 +23,10 @@ Two-node RJ45 cable tester with ESP-IDF 6.1.x (C++):
 - Measurement: the master drives one line HIGH at a time; both sides read all
   eight lines; the slave returns its bitmask; `cable_test::analyze` derives the
   mapping, shorts, opens, and cable kind. Length is an optional experimental
-  capacitance measurement.
+  capacitance measurement. Additional analyses: repeated-soak per-line
+  stability (Wackeltest), open-line break distance from the capacitance,
+  per-line length calibration in NVS (`len_cal`), coarse hard/soft short
+  classification via ADC, and a square-wave tone generator for wire tracing.
 
 ## Commands
 
@@ -83,40 +86,57 @@ warning-free.
 ## Architecture
 
 - `components/cable_test/` — pure C++17-compatible core, no ESP-IDF dependency:
-  `model.hpp` (`TestData`, `Analysis`), `analyzer.cpp` (classification), and
-  `version.hpp`. Keep it host-testable; add analyzer tests for any logic change.
+  `model.hpp` (`TestData`, `Analysis`), `analyzer.cpp` (classification),
+  `soak.hpp`/`soak.cpp` (per-line stability for the Wackeltest), and
+  `version.hpp`. Keep it host-testable; add analyzer/soak tests for any logic
+  change.
 - `components/rj45_port/` — GPIO hardware layer (`Rj45Port`: drive/sample/
-  length) and `pin_map.hpp` with default pin arrays for Node A and B. On
-  ESP32-S3 both nodes use the same RJ45 wiring, GPIO 4–11 (`kNodeBPins` aliases
-  `kNodeAPins`), so identical boards/harnesses can be used; the role is
+  length/ADC/tone) and `pin_map.hpp` with default pin arrays for Node A and B.
+  On ESP32-S3 both nodes use the same RJ45 wiring, GPIO 4–11 (`kNodeBPins`
+  aliases `kNodeAPins`), so identical boards/harnesses can be used; the role is
   firmware-only. Conservative fallback for classic ESP32: 16,17,18,19,21,22,23,
   25. The master additionally reserves GPIO 12–18 and 21/47 for an SPI ILI9488
   display (`namespace display`: SCLK 12, MOSI 13, MISO 14, CS 15, DC 16, RST 17,
   backlight 18, optional touch CS 21/IRQ 47); a `static_assert` rejects overlap
-  with `kNodeAPins`. `LengthConfig` holds the calibration constants for the
-  experimental length measurement.
+  with `kNodeAPins`. `LengthConfig` holds the calibration constants and the
+  sample count for the median length measurement. `measureShortVoltage()` uses
+  ADC1 on GPIO 4–10 and ADC2 on GPIO 11 (experimental); `startTone()`/`stopTone()`
+  run a square wave via `esp_timer`.
 - `components/cable_link/` — `protocol.hpp` (8-byte packed `Frame`, `MsgType`,
   channel, settle and timeout constants), `master_link` (pairing, request/reply
   with seq matching, 3 retries × 300 ms), `slave_link` (command worker, periodic
   HELLO). ESP-NOW RX callbacks only enqueue; every send runs in a worker task.
 - `components/test_runner/` — orchestrates idle sampling, the eight driven
-  rounds, optional length measurement, and cleanup. A `try_lock` mutex reports
-  `ESP_ERR_INVALID_STATE` when busy; unpaired link is also `ESP_ERR_INVALID_STATE`.
+  rounds, optional short-quality and length/break measurements, the soak loop,
+  and cleanup. A `try_lock` mutex reports `ESP_ERR_INVALID_STATE` when busy
+  (including during a soak); unpaired link is also `ESP_ERR_INVALID_STATE`. A
+  per-line length scale is applied before the analysis derives the break
+  distance.
 - `components/report/` — hand-built JSON and German console summary. No cJSON
-  (not bundled in IDF 6).
+  (not bundled in IDF 6). JSON includes per-line `lengthM`, `openDistanceM`,
+  `shortQuality`, `shortVoltageV`, and optionally a `soak` object.
 - `components/web_ui/` — `esp_http_server`, serves `www/index.html` (embedded via
-  `EMBED_TXTFILES`) plus `/api/status` and `/api/test`. UI edits require a
-  rebuild (the file is compiled into the firmware).
+  `EMBED_TXTFILES`) plus `/api/status`, `/api/test`, `/api/soak` (Wackeltest;
+  optional `runs`/`interval`), `/api/tone` (line/freq/off), and `/api/len`
+  (cal/reset/status). `/api/status` reports `toneLine`, `toneFreq`, and the
+  per-line `lengthScale`. UI edits require a rebuild (the file is compiled into
+  the firmware).
 - `components/display_ui/` — master-only ILI9488 SPI driver (SPI2, 40 MHz,
   18-bit RGB666, portrait 320×480, asynchronous DMA flush with two LVGL
   partial buffers) and a graphical LVGL 9.x UI styled after the web UI. LVGL and the XPT2046 share SPI2; touch coordinates come from
   XPT2046 X/Y readings (2 MHz) with `T_IRQ` as a fast hint. First boot runs a
   four-point calibration stored in NVS namespace `touch_cal` (`touchcal`
   console command resets it). The display task polls
-  `TestRunner::last_result()` and shows four fixed pages (Test, Ergebnis,
-  Kabel, Matrix/Roh) with a bottom tab bar instead of scrolling; it runs a
-  test synchronously from the "Kabel testen" button and switches to the
-  result page afterwards. LVGL is fetched via the component manager
+  `TestRunner::last_result()` and shows six fixed pages (Test, Ergebnis,
+  Wackel, Tool, Kabel, Matrix/Roh) with a bottom tab bar instead of scrolling.
+  "Kabel testen" runs synchronously and switches to the result page;
+  "Wackeltest" runs `TestRunner::run_soak()` in a separate worker task (the
+  LVGL task polls `soak_done_`), so the UI stays responsive, and then shows
+  the Wackel page. The Tool page has Ton/Kalibrierung sub-views: tone line
+  selection 1–8, frequency +/- in 500 Hz steps (500–10000 Hz), and an explicit
+  on/off toggle; calibration uses the shared `length_cal::calibrate`. The
+  result page shows per-line lengths, break distances, and hard/soft short
+  quality. LVGL is fetched via the component manager
   (`components/display_ui/idf_component.yml`); `managed_components/` is
   git-ignored, `dependencies.lock` is tracked. Sources are guarded by
   `CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3`; the
@@ -124,10 +144,14 @@ warning-free.
   sdkconfig is loaded. LVGL uses CLIB malloc, RGB565 and Montserrat 14/20/28 (with a
   compile-time fallback to 14 if 20/28 are disabled);
   UI strings are ASCII because the built-in fonts lack German umlauts.
+- `components/length_cal/` — NVS-backed per-line length scale (namespace
+  `len_cal`) and the shared calibration workflow
+  (`calibrate(TestRunner&, reference_m)`), used by console, web UI, and
+  display. Depends on `test_runner`; no UI code.
 - `main/` — role-specific app entry (only `app_master.cpp` or `app_slave.cpp` is
   selected in `main/CMakeLists.txt`), WiFi APSTA/STA setup and runtime AP
   reconfiguration (`wifi.cpp`), UART REPL (`console_ui.cpp`), AP credential
-  defaults (`app_config.hpp`) and NVS-backed credential storage
+  defaults (`app_config.hpp`), and NVS-backed credential storage
   (`wifi_config.cpp`).
 
 ## Key files to edit
@@ -166,12 +190,22 @@ warning-free.
 - Channel, settle time, RPC timeouts, frame types:
   `components/cable_link/include/cable_link/protocol.hpp`.
 - Length calibration: `LengthConfig` in
-  `components/rj45_port/include/rj45_port/rj45_port.hpp`.
-- Web UI: `components/web_ui/www/index.html` (embedded; rebuild after edits).
+  `components/rj45_port/include/rj45_port/rj45_port.hpp` (median sample count,
+  capacitance constants); per-line scale and calibration workflow in
+  `components/length_cal/` (console `len cal <meter>`, web
+  **Werkzeuge → Längenkalibrierung**, display **Tool → Kalibrieren**).
+- Console commands: `main/console_ui.cpp` (`test`, `soak`, `len`, `tone`,
+  `status`, `wifi`, `touchcal`, `reboot`). `soak` runs repeated digital tests
+  and one final detailed test; `tone <1-8> [Hz]` / `tone off` drives a tracing
+  tone.
+- Web UI: `components/web_ui/www/index.html` (embedded; rebuild after edits)
+  with Wackeltest and the Werkzeuge card (Suchton, Längenkalibrierung);
+  endpoints in `components/web_ui/src/web_ui.cpp`.
 - Display UI: `components/display_ui/src/display_ui.cpp` (LVGL layout,
-  touch calibration, NVS `touch_cal`) and `src/ili9488.cpp` (portrait
-  `kMadctl`, SPI clock, init sequence, XPT2046 reads, backlight). LVGL
-  settings: `sdkconfig.master.defaults`; dependency:
+  touch calibration, NVS `touch_cal`, Wackel/Tool pages, soak worker, tone and
+  calibration controls) and `src/ili9488.cpp` (portrait `kMadctl`, SPI clock,
+  init sequence, XPT2046 reads, backlight). LVGL settings:
+  `sdkconfig.master.defaults`; dependency:
   `components/display_ui/idf_component.yml`.
 - Role defaults: `sdkconfig.master.defaults`, `sdkconfig.slave.defaults`.
 
@@ -197,9 +231,21 @@ warning-free.
   Do not promise A/B or pair-grouping detection.
 - A pure conductor swap is a *custom* mapping, not a short. The analyzer logic
   and `host_tests/test_main.cpp` guard this distinction.
-- Length measurement is capacitance-based, only runs on electrically clean
-  wiring (no shorts/opens/idle activity), and is deliberately labeled
-  experimental (±20-30 %).
+- Length measurement is capacitance-based and deliberately experimental
+  (±20-30 %). It runs for connected and open lines (open = break distance);
+  shorted lines and all-open cables are skipped. The per-line scale is stored
+  in NVS `len_cal`.
+- Short-quality (hard/soft) is a coarse ADC estimate from the internal
+  pull-up/pull-down divider, not a calibrated insulation tester. GPIO 11 is on
+  ADC2, which is shared with WiFi; reads may time out (quality stays unknown).
+  The measurement only runs for lines that are shorted and not open at the
+  master.
+- The soak/Wackeltest repeats the digital test (`run_soak`) while holding the
+  runner mutex; the protocol is unchanged. Length/ADC measurements run only in
+  the final detailed test. It detects changes between runs, not sub-millisecond
+  glitches.
+- The tone generator drives one line push-pull via `esp_timer`; only use it on
+  unpowered cables. Starting a test stops the tone automatically.
 - ESP-IDF 6.1 specifics: the old `driver` component is split — use
   `esp_driver_gpio`; cJSON is no longer bundled; build with IDF 6.1.x.
 - Target/role pairing: **both roles are built for `esp32s3`** and use the same

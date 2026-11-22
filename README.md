@@ -37,12 +37,19 @@ vom Master getriebenen Pegel nicht sehen und meldet alle Adern als offen.
 - Unterbrechungen und Kurzschlüsse (auch innerhalb eines Steckers)
 - Kabeltyp-Erkennung: 1:1-Patchkabel, Crossover (Gigabit und 10/100),
   benutzerdefinierte Belegung, fehlerhaft
-- Experimentelle Längenmessung pro Paar (Kapazitätsverfahren)
-- Web-UI im WLAN mit Verdrahtungsgrafik, Matrix, Diagnose und Rohdaten
+- Experimentelle Längenmessung pro Ader (Median, per-Ader-Kalibrierung im NVS)
+- Fehlerortung bei offenen Adern: Bruchdistanz vom Master (ca. ±20–30 %)
+- Wackeltest/Intermittenzerkennung: Test läuft mehrfach, pro Ader wird
+  stabil/instabil gemeldet
+- Grobe Kurzschlussklassifikation **hart/weich** über den ADC (experimentell)
+- Suchton auf einer Ader für die Adernsuche mit einem Induktionspiepser
+- Web-UI im WLAN mit Verdrahtungsgrafik, Matrix, Diagnose, Rohdaten,
+  Wackeltest sowie Werkzeugen (Suchton, Längenkalibrierung)
 - Grafisches Display am Master (LVGL, Porträt 320×480): Status, Testkarten
-  für Verdrahtung, Matrix, Diagnose und Längen; Touch-Bedienung mit
-  Vier-Punkt-Kalibrierung
-- Serielle Konsole mit `test`, `status`, `wifi`, `touchcal`, `reboot`, `help`
+  für Verdrahtung, Matrix, Diagnose, Längen, Wackeltest und Werkzeuge
+  (Suchton, Längenkalibrierung); Touch-Bedienung mit Vier-Punkt-Kalibrierung
+- Serielle Konsole mit `test`, `soak`, `len`, `tone`, `status`, `wifi`,
+  `touchcal`, `reboot`, `help`
 - Automatisches Wieder-Pairing (Slave sendet alle 3 s ein HELLO)
 
 ## Pin-Mapping
@@ -400,22 +407,81 @@ Auf diesem Rechner liegt VS Code unter
 1. Beide Tester mit gemeinsamer Masse mit Strom versorgen.
 2. Das zu prüfende Kabel zwischen die beiden RJ45-Buchsen stecken.
 3. Beim ersten Start am Display die vier Kreuze antippen (Touch-Kalibrierung).
-   Danach im Display auf **Kabel testen** tippen; die Ergebnisse erscheinen
-   auf den Seiten **Ergebnis**, **Kabel** und **Matrix** (unten umschaltbar,
-   kein Scrollen nötig).
+   Danach im Display **Kabel testen** oder **Wackeltest** antippen; die
+   Ergebnisse erscheinen auf den Seiten **Ergebnis**, **Wackel**, **Tool**,
+   **Kabel** und **Matrix** (unten umschaltbar, kein Scrollen nötig).
 4. Alternativ mit dem WLAN **`CableTester`** verbinden (Passwort
    **`cabletest123`**), <http://192.168.4.1/> öffnen, oben muss „Slave
-   verbunden“ stehen; dann **Kabel testen** drücken.
-5. Oder seriell mit 115200 8N1: `test` startet einen Test, `status` zeigt den
-   Link, `wifi` zeigt/ändert SSID/Passwort, `touchcal` löscht die
-   Touch-Kalibrierung (danach `reboot`), `reboot` startet das Board neu,
-   `help` listet die Kommandos.
+   verbunden“ stehen; dann **Kabel testen** drücken. Für intermittierende
+   Fehler **Wackeltest** starten und dabei am Stecker/Kabel wackeln. Unter
+   **Werkzeuge** stehen Suchton und Längenkalibrierung zur Verfügung.
+5. Oder seriell mit 115200 8N1: `test` startet einen Test, `soak` wiederholt
+   ihn für den Wackeltest, `len` kalibriert die Längenmessung, `tone` erzeugt
+   einen Suchton, `status` zeigt den Link, `wifi` zeigt/ändert SSID/Passwort,
+   `touchcal` löscht die Touch-Kalibrierung (danach `reboot`), `reboot` startet
+   das Board neu, `help` listet die Kommandos.
 
 Auf dem ESP32-S3 läuft die serielle Konsole standardmäßig über **UART0**
 (UART-USB-Port des Dev-Boards). Für den **nativen USB-Port** des S3 in
 `menuconfig` `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` setzen (oder in
 `sdkconfig.master` eintragen) und neu bauen; die Firmware unterstützt beide
 Konsolentypen. Die Web-UI funktioniert unabhängig davon.
+
+### Wackeltest, Fehlerortung, Kalibrierung und Suchton
+
+**Wackeltest (Intermittenz):** In der Web-UI **Wackeltest** drücken, im
+Display den Button **Wackeltest** (Ergebnis auf der Seite **Wackel**) verwenden
+oder seriell `soak [laeufe 1-200] [pause_ms 0-5000]` ausführen (Default 30
+Läufe, 300 ms Pause). Während des Laufs am Stecker/Kabel wackeln. Pro Ader
+werden verbundene/offene/kurzgeschlossene Läufe und die Zielader gezählt;
+„stabil“ heißt: in allen Läufen verbunden, nie offen oder kurzgeschlossen und
+immer dieselbe Zielader. Das ESP-NOW-Protokoll bleibt unverändert. Die
+schnellen Wackeltest-Läufe prüfen nur die digitale Verbindung; die teure
+Längen-/ADC-Messung läuft einmal im abschließenden Detailtest.
+
+**Fehlerortung:** Bei einer offenen Ader misst der Master die Kapazität bis
+zum Bruch und zeigt „Bruch ca. X m“ (Entfernung vom Master, ±20–30 %). Ein
+Bruch direkt am fernen Stecker liest sich wie die volle Kabellänge. Bei einem
+komplett offenen Kabel (kein Kabel gesteckt) wird nicht gemessen;
+kurzgeschlossene Adern haben keinen Längenwert.
+
+**Längenkalibrierung:** Ein sauberes Referenzkabel bekannter Länge anstecken
+(alle Adern durchgängig, keine Kurzschlüsse, keine Fremdspannung) und
+kalibrieren:
+
+- **Web-UI:** **Werkzeuge → Längenkalibrierung**, Referenzlänge eintragen und
+  **Kalibrieren**; **Zurücksetzen** löscht die Faktoren.
+- **Display:** Seite **Tool**, Referenzlänge mit `-`/`+` (0,5-m-Schritte)
+  einstellen und **Kalibrieren**; **Reset** löscht die Faktoren. Die Skalen
+  erscheinen als Min/Max.
+- **Seriell:** `len cal <meter>`, `len status`, `len reset`.
+
+Der Master berechnet pro Ader einen Faktor aus der aktuellen Messung und
+speichert ihn im NVS (Namespace `len_cal`). Die Faktoren gelten auch für
+Bruchdistanzen.
+
+**Kurzschlussart:** Bei Kurzschlüssen misst der Master die Spannung an den
+beteiligten, auf der Master-Seite durchgängigen Adern über den internen
+Pull-up (andere Adern Pull-down, Slave hochohmig). Daraus ergibt sich eine
+grobe Einordnung **hart** (< 1,9 V) oder **weich** (hochohmig). Wegen der
+streuenden internen Pull-up/Pull-down-Widerstände ist das experimentell.
+Ist die Gegenader auf der Master-Seite offen, fehlt der Strompfad; ein harter
+Kurzschluss kann dann als weich erscheinen. Ader 8 (GPIO 11) nutzt ADC2 und
+kann bei aktivem WLAN Zeitüberschreitungen liefern; dann bleibt die Qualität
+„unbekannt“.
+
+**Suchton:** Ein Rechteckton (Default 1 kHz) auf genau einer Ader, zum
+Aufspüren mit einem Tonprüfer/Induktionspiepser:
+
+- **Web-UI:** **Werkzeuge → Suchton**, Ader (1–8) und Frequenz (50–10000 Hz)
+  wählen, **Ton einschalten**; derselbe Button schaltet wieder aus.
+- **Display:** Seite **Tool → Ton**; Ader 1–8 auswählen, Frequenz mit `-`/`+`
+  (500-Hz-Schritte, 500–10000 Hz) einstellen und **Ton einschalten** bzw.
+  **Ton ausschalten**.
+- **Seriell:** `tone <ader 1-8> [frequenz_hz 50-10000]`, `tone off`.
+
+Nur an spannungsfreien Kabeln verwenden; ein neu gestarteter Test stoppt den
+Ton automatisch.
 
 ### Display am Master (LVGL)
 
@@ -424,16 +490,25 @@ grafische Oberfläche mit LVGL, angelehnt an die Web-UI:
 
 - **Kopfzeile:** „Kabeltester“, Node/SSID, Status-Chip (verbunden/getrennt/
   Test läuft), RSSI und AP-IP
-- **Test-Seite:** Hinweis zum Testen, großer Button **„Kabel testen“** und
-  der Button **„Touch kalibrieren“**
-- **Ergebnis-Seite:** Verdikt, Diagnose (Kurzschlüsse, offene Adern,
-  Fremdspannung) und Längen (experimentell) – mit denselben Farben wie die
-  Web-UI (grün = gut, gelb = Warnung, rot = Fehler)
+- **Test-Seite:** Hinweis zum Testen, großer Button **„Kabel testen“** sowie
+  die Buttons **„Wackeltest“** und **„Touch kalibrieren“**
+- **Ergebnis-Seite:** Verdikt, Diagnose (Kurzschlüsse inkl. hart/weich,
+  offene Adern, Fremdspannung) und Längen pro Ader inkl. Bruchdistanz
+  (experimentell) – mit denselben Farben wie die Web-UI (grün = gut,
+  gelb = Warnung, rot = Fehler)
+- **Wackel-Seite:** Statistik des letzten Wackeltests pro Ader (stabil/
+  instabil, verbundene/offene/kurzgeschlossene Läufe, Zielader); der Lauf
+  läuft in einem eigenen Task, die Oberfläche bleibt bedienbar
+- **Tool-Seite:** zwei Unteransichten **Ton** und **Kalibrierung**.
+  Ton: Ader 1–8, Frequenz mit `-`/`+` (500-Hz-Schritte), Ein/Aus-Schalter.
+  Kalibrierung: Referenzlänge mit `-`/`+`, **Kalibrieren**, **Reset**,
+  Skalenübersicht
 - **Kabel-Seite:** Verdrahtungsgrafik A→B
 - **Matrix-Seite:** Messmatrix; über **„Rohdaten“** lassen sich die Rohwerte
   einblenden
-- **Touch-Bedienung:** vier große Tabs am unteren Rand; die Seiten wechseln
-  ohne Scrollen. Die Koordinaten werden über den XPT2046 gelesen.
+- **Touch-Bedienung:** sechs große Tabs am unteren Rand (Test, Ergebnis,
+  Wackel, Tool, Kabel, Matrix); die Seiten wechseln ohne Scrollen. Die
+  Koordinaten werden über den XPT2046 gelesen.
 
 **Erste Inbetriebnahme / Kalibrierung:** Beim ersten Start (oder nach
 `touchcal`) erscheinen vier Kreuze. Jedes Kreuz antippen und wieder loslassen;
@@ -528,14 +603,40 @@ Auswertung:
 - 1:1-Belegung → Patchkabel; vollständiger bzw. 10/100-Paartausch → Crossover;
   alles andere → benutzerdefiniert; Lücken/Mehrfachverbindungen → fehlerhaft.
 
+### Kurzschlussgüte und Fehlerortung
+
+Bei erkannten Kurzschlüssen misst der Master zusätzlich die Spannung an den
+beteiligten Adern, sofern sie auf der Master-Seite durchgängig sind: Die Ader
+wird über den internen Pull-up gehalten, alle anderen Adern liegen auf
+Pull-down, der Slave geht hochohmig. Ein harter Kurzschluss bildet mit dem
+Pull-down einen Spannungsteiler (ca. 1,6 V bei 3,3 V), ein hochohmiger
+Feuchte-/Korrosionsübergang liegt darüber. Die Spannung wird per ADC gelesen
+und als **hart** bzw. **weich** eingeordnet; Ader 8 läuft über ADC2 und kann
+bei aktiver WLAN-Verbindung ausfallen.
+
+Bei offenen Adern nutzt der Test dieselbe Kapazitätsmessung wie die
+Längenmessung: Die Kapazität der noch angeschlossenen Aderstrecke ist
+proportional zur Entfernung bis zum Bruch. Daraus entsteht „Bruch ca. X m“
+vom Master. Das Verfahren ist grob (±20–30 %) und funktioniert nur, wenn der
+Bruch zwischen den Steckern liegt; ein offener Kontakt direkt am fernen
+Stecker liest sich wie die volle Länge.
+
 ### Längenmessung (experimentell)
 
-Nur bei elektrisch sauberer Verdrahtung: Der Slave geht hochohmig, der Master
-lädt jede Ader über den internen Pull-up auf und misst die Ladezeit. Aus
-`t = R·C·ln(4)` wird die Kapazität und daraus mit ca. 50 pF/m eine Länge
-geschätzt. Die interne Pull-up-Resistenz streut stark; die Werte sind nur grobe
-Anhaltspunkte (±20–30 %). Kalibrierkonstanten stehen in `LengthConfig` in
+Der Slave geht hochohmig, der Master lädt jede Ader ohne Kurzschluss über den
+internen Pull-up auf und misst die Ladezeit; pro Ader werden fünf
+Einzelmessungen gemacht und der Median verwendet. Aus `t = R·C·ln(4)` wird
+die Kapazität und daraus mit ca. 50 pF/m eine Länge geschätzt. Die interne
+Pull-up-Resistenz streut stark; die Werte sind nur grobe Anhaltspunkte
+(±20–30 %). Kalibrierkonstanten stehen in `LengthConfig` in
 `components/rj45_port/include/rj45_port/rj45_port.hpp`.
+
+Die Messung läuft auch bei einzelnen offenen Adern (als Bruchdistanz).
+Komplett offene Kabel werden übersprungen, kurzgeschlossene Adern erhalten
+keinen Längenwert. Über `len cal <meter>` (Konsole),
+**Werkzeuge → Längenkalibrierung** (Web-UI) bzw. **Tool → Kalibrieren**
+(Display) lässt sich pro Ader ein Kalibrierfaktor aus einem Referenzkabel im
+NVS (`len_cal`) speichern; die Ausgabe erfolgt in Konsole und Web-UI pro Ader.
 
 Mit den 1-kΩ-Serienwiderständen aus dem Schaltplan steigt die effektive
 Ladezeit um ca. 2 % (`pullup_ohm` dann auf `46000` setzen). Die low-cap
@@ -551,6 +652,16 @@ Messstreuung.
   Topologie nicht immer eindeutig. Die Rohmatrix zeigt alle Beobachtungen.
 - Die internen Pull-downs sind schwach; sehr lange oder hochohmige Kabel können
   als offen erscheinen.
+- **Kurzschlussgüte:** nur eine grobe Einordnung; die internen Pull-up-/
+  Pull-down-Widerstände streuen stark, Ader 8 (ADC2) kann bei WLAN
+  Zeitüberschreitungen liefern. Ist die Gegenader auf der Master-Seite offen,
+  fehlt der Strompfad und ein harter Kurzschluss kann als weich erscheinen.
+  Kein Ersatz für eine Isolationsmessung mit definierter Prüfspannung.
+- **Bruchdistanz:** ±20–30 %, nur bei offenen Adern und nur mit einem
+  definierten Strompfad; bei mehreren Fehlern oder einem Bruch direkt am
+  fernen Stecker ist die Ortsangabe ungenau.
+- **Wackeltest:** erkennt Änderungen zwischen den digitalen Testläufen; sehr
+  kurze Aussetzer zwischen zwei Läufen können unentdeckt bleiben.
 
 ## Projektstruktur
 
@@ -560,6 +671,7 @@ components/
   rj45_port/     GPIO-Schicht + Pin-Mapping pro Node
   cable_link/    ESP-NOW-Protokoll, Master-/Slave-Link
   test_runner/   Ablaufsteuerung der Messung
+  length_cal/    per-Ader-Längenkalibrierung im NVS + Kalibrierablauf
   report/        JSON- und Text-Report
   web_ui/        HTTP-Server + eingebettete Single-Page-UI
   display_ui/    LVGL-Oberfläche + ILI9488/XPT2046-Treiber (nur Master)
@@ -584,7 +696,9 @@ ctest --test-dir host_tests/build --output-on-failure
 
 Die Host-Tests decken ab: 1:1, Crossover (Gigabit und 10/100), offene Ader,
 Kurzschluss am fernen und nahen Ende, Tausch vs. Kurzschluss, doppelte
-Zuordnung, Ruhezustand mit Fremdspannung, komplett offenes Kabel.
+Zuordnung, Ruhezustand mit Fremdspannung, komplett offenes Kabel,
+Bruchdistanz aus der Längenmessung, Kurzschlussgüte hart/weich sowie die
+Wackeltest-Statistik (stabil, offene Ader, Wechsel der Zielader).
 
 Zusätzlich müssen beide Firmware-Rollen fehlerfrei bauen:
 
@@ -622,4 +736,7 @@ die Host-Tests sind verifiziert. Die Inbetriebnahme auf echter Hardware (beide
 Boards, reales Kabel) steht noch aus. Das Master-Display nutzt jetzt LVGL im
 Porträtmodus (320×480) mit einer Web-UI-ähnlichen Kartenoberfläche und
 Vier-Punkt-Touch-Kalibrierung; die Inbetriebnahme auf echter Display-Hardware
-steht ebenfalls noch aus.
+steht ebenfalls noch aus. Wackeltest, Fehlerortung, Längenkalibrierung,
+Kurzschlussgüte und Suchton sind implementiert und bauen, wurden aber noch
+nicht an realen Kabeln verifiziert — insbesondere die ADC-Kurzschlussgüte und
+die per-Ader-Kalibrierung brauchen Messungen an Referenzkabeln.

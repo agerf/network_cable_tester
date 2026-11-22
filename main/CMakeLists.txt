@@ -6,6 +6,7 @@ idf_component_register(
         rj45_port
         cable_link
         test_runner
+        length_cal
         report
         web_ui
         display_ui

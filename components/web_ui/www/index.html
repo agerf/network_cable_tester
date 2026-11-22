@@ -100,6 +100,31 @@
   .primary:hover:not(:disabled) { filter: brightness(1.08); }
   .primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .primary.secondary {
+    background: var(--surface-2); color: var(--ink);
+    border: 1px solid var(--border);
+  }
+  .primary.secondary:hover:not(:disabled) { filter: brightness(1.12); }
+  .primary.secondary .spinner {
+    border-color: rgba(120, 120, 120, 0.45);
+    border-top-color: var(--ink);
+  }
+  .soak-stable { color: var(--good); font-weight: 600; }
+  .soak-unstable { color: var(--critical); font-weight: 600; }
+  .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 10px; }
+  @media (max-width: 860px) { .tools-grid { grid-template-columns: 1fr; } }
+  .tool-block { display: grid; gap: 8px; align-content: start; }
+  .tool-block h4 { margin: 0; font-size: 13px; font-weight: 650; color: var(--ink-2); }
+  .tool-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+  .tool-row label { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
+  .tool-row select, .tool-row input {
+    min-height: 36px; padding: 6px 8px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--ink);
+    font: inherit;
+  }
+  .tool-row input[type="number"] { width: 100px; }
+  .tool-block .primary { min-height: 38px; padding: 0 14px; }
   .spinner {
     display: inline-block; width: 14px; height: 14px; margin-right: 8px;
     vertical-align: -2px; border: 2px solid rgba(255,255,255,0.45);
@@ -205,9 +230,54 @@
       <h2>Beide Enden einstecken, dann testen.</h2>
       <p class="muted" style="margin-top:6px">Der Slave misst am gegenüberliegenden Ende. Der Test dauert nur wenige Sekunden.</p>
       <p class="note" style="margin-top:4px">Wichtig: Beide Tester brauchen eine gemeinsame Masse (z. B. beide USB-Kabel am selben Rechner oder Hub).</p>
+      <p class="note" style="margin-top:4px">Wackeltest: wiederholt den Test; dabei am Stecker/Kabel wackeln. Instabile Adern werden pro Ader gemeldet.</p>
     </div>
-    <button id="runBtn" class="primary" type="button" disabled>Kabel testen</button>
+    <div class="actions">
+      <button id="runBtn" class="primary" type="button" disabled>Kabel testen</button>
+      <button id="soakBtn" class="primary secondary" type="button" disabled>Wackeltest (ca. 10 s)</button>
+    </div>
     <p id="errorBanner" class="banner error" role="alert" hidden></p>
+  </section>
+
+  <section class="card">
+    <h3>Werkzeuge</h3>
+    <div class="tools-grid">
+      <div class="tool-block">
+        <h4>Suchton</h4>
+        <div class="tool-row">
+          <label>Ader
+            <select id="toneLine">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+          <label>Frequenz
+            <input id="toneFreq" type="number" min="50" max="10000" step="50" value="1000">
+          </label>
+          <button id="toneBtn" class="primary secondary" type="button" disabled>Ton einschalten</button>
+        </div>
+        <p id="toneStatus" class="note">Kein Ton.</p>
+        <p class="note">Nur an spannungsfreien Kabeln. Zum Aufspüren ist ein Tonprüfer/Induktionspiepser nötig.</p>
+      </div>
+      <div class="tool-block">
+        <h4>Längenkalibrierung</h4>
+        <div class="tool-row">
+          <label>Referenzlänge
+            <input id="lenRef" type="number" min="0.1" max="300" step="0.5" value="10">
+          </label>
+          <button id="lenCalBtn" class="primary secondary" type="button" disabled>Kalibrieren</button>
+          <button id="lenResetBtn" class="primary secondary" type="button" disabled>Zurücksetzen</button>
+        </div>
+        <p id="lenStatus" class="note">Mit sauberem Referenzkabel kalibrieren (alle 8 Adern verbunden, keine Kurzschlüsse/Fremdspannung).</p>
+        <p id="lenScale" class="note">Skalen: –</p>
+      </div>
+    </div>
   </section>
 
   <section id="result" hidden aria-live="polite">
@@ -219,6 +289,15 @@
         <p id="verdictDetail" class="muted">–</p>
       </div>
     </div>
+
+    <section id="soakCard" class="card" hidden>
+      <h3>Wackeltest <span class="badge">Intermittenz</span></h3>
+      <p id="soakVerdict" class="muted"></p>
+      <div class="table-wrap">
+        <table id="soakTable" class="lengths"></table>
+      </div>
+      <p class="note">Während des Laufs am Stecker wackeln. „stabil“ = in allen Läufen dieselbe Verbindung, ohne Unterbrechung oder Kurzschluss.</p>
+    </section>
 
     <div class="two-col">
       <section class="card">
@@ -243,10 +322,12 @@
         <dl id="diagnostics" class="diag"></dl>
       </section>
       <section class="card">
-        <h3>Längen <span class="badge">experimentell</span></h3>
-        <table id="lengths" class="lengths"></table>
+        <h3>Längen <span class="badge">pro Ader · experimentell</span></h3>
+        <div class="table-wrap">
+          <table id="lengths" class="lengths"></table>
+        </div>
         <p id="lengthStatus" class="note" hidden></p>
-        <p class="note">Schätzung über die Leitungskapazität; typische Abweichung ±20–30 %. Nur bei elektrisch sauberer Verdrahtung gemessen.</p>
+        <p class="note">Median über mehrere Kapazitätsmessungen, per Ader kalibrierbar (Konsole: <code>len cal &lt;meter&gt;</code>); typische Abweichung ±20–30 %. Bei offenen Adern wird die Bruchdistanz vom Master geschätzt; kurzgeschlossene Adern haben keinen Längenwert.</p>
       </section>
     </div>
 
@@ -267,14 +348,29 @@
 
   const byId = (id) => document.getElementById(id);
   const runBtn = byId('runBtn');
+  const soakBtn = byId('soakBtn');
   const errorBanner = byId('errorBanner');
   const statusChip = byId('statusChip');
   const statusText = byId('statusText');
+  const toneLine = byId('toneLine');
+  const toneFreq = byId('toneFreq');
+  const toneBtn = byId('toneBtn');
+  const toneStatus = byId('toneStatus');
+  const lenRef = byId('lenRef');
+  const lenCalBtn = byId('lenCalBtn');
+  const lenResetBtn = byId('lenResetBtn');
+  const lenStatus = byId('lenStatus');
+  const lenScale = byId('lenScale');
 
   let paired = false;
   let busy = false;
   let running = false;
+  let runningMode = '';
   let lastRssi = null;
+  let toneLineActive = 0;
+  let toneFreqActive = 0;
+  let lengthScale = null;
+  let toolsRequestRunning = false;
 
   async function getJSON(url, options) {
     const response = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
@@ -302,14 +398,21 @@
     }
   }
 
+  function setButtonsDisabled(disabled) {
+    runBtn.disabled = disabled;
+    soakBtn.disabled = disabled;
+  }
+
   function renderStatus() {
+    renderTools();
     statusChip.classList.remove('ok', 'bad', 'busy');
     if (running || busy) {
       statusChip.classList.add('busy');
-      statusText.textContent = 'Test läuft …';
-      runBtn.disabled = true;
+      statusText.textContent = runningMode === 'soak' ? 'Wackeltest läuft …' : 'Test läuft …';
+      setButtonsDisabled(true);
       if (!running) {
         runBtn.textContent = 'Test läuft …';
+        soakBtn.textContent = 'Wackeltest (ca. 10 s)';
       }
       return;
     }
@@ -322,8 +425,9 @@
       statusChip.classList.add('bad');
       statusText.textContent = 'Slave getrennt';
     }
-    runBtn.disabled = !paired;
+    setButtonsDisabled(!paired);
     runBtn.textContent = 'Kabel testen';
+    soakBtn.textContent = 'Wackeltest (ca. 10 s)';
   }
 
   async function refreshStatus() {
@@ -335,12 +439,126 @@
       paired = Boolean(status.paired);
       busy = Boolean(status.busy);
       lastRssi = typeof status.rssi === 'number' ? status.rssi : null;
+      toneLineActive = Number(status.toneLine) || 0;
+      toneFreqActive = Number(status.toneFreq) || 0;
+      lengthScale = Array.isArray(status.lengthScale) ? status.lengthScale : null;
     } catch (_) {
       paired = false;
       busy = false;
       lastRssi = null;
+      toneLineActive = 0;
+      toneFreqActive = 0;
     }
     renderStatus();
+  }
+
+  function renderTools() {
+    const disabled = running || busy || toolsRequestRunning;
+    toneBtn.disabled = disabled;
+    lenCalBtn.disabled = !paired || disabled;
+    lenResetBtn.disabled = disabled;
+
+    toneBtn.textContent = toneLineActive > 0 ? 'Ton ausschalten' : 'Ton einschalten';
+    if (toneLineActive > 0) {
+      toneStatus.textContent = 'Ton auf Ader ' + toneLineActive + ', ' + toneFreqActive + ' Hz.';
+      toneLine.value = String(toneLineActive);
+    } else {
+      toneStatus.textContent = 'Kein Ton.';
+    }
+
+    if (Array.isArray(lengthScale) && lengthScale.length === 8) {
+      lenScale.textContent = 'Skalen: ' + lengthScale
+        .map((value, index) => 'A' + (index + 1) + ' ' + Number(value).toFixed(3))
+        .join(' · ');
+    } else {
+      lenScale.textContent = 'Skalen: –';
+    }
+  }
+
+  async function toggleTone() {
+    if (toolsRequestRunning) {
+      return;
+    }
+    toolsRequestRunning = true;
+    setError('');
+    renderTools();
+    try {
+      let result;
+      if (toneLineActive > 0) {
+        result = await getJSON('/api/tone?off=1', { method: 'POST' });
+      } else {
+        const line = Number(toneLine.value);
+        const freq = Number(toneFreq.value);
+        if (!Number.isInteger(line) || line < 1 || line > 8) {
+          throw new Error('Ader 1-8 wählen');
+        }
+        if (!Number.isFinite(freq) || freq < 50 || freq > 10000) {
+          throw new Error('Frequenz 50-10000 Hz');
+        }
+        result = await getJSON('/api/tone?line=' + line + '&freq=' + Math.round(freq), {
+          method: 'POST'
+        });
+      }
+      toneLineActive = Number(result.toneLine) || 0;
+      toneFreqActive = Number(result.toneFreq) || 0;
+    } catch (error) {
+      setError(error.message || 'Suchton fehlgeschlagen');
+    } finally {
+      toolsRequestRunning = false;
+      await refreshStatus();
+    }
+  }
+
+  async function calibrateLength() {
+    if (toolsRequestRunning) {
+      return;
+    }
+    const meters = Number(lenRef.value);
+    if (!Number.isFinite(meters) || meters < 0.1 || meters > 300) {
+      lenStatus.textContent = 'Referenzlänge 0,1–300 m.';
+      return;
+    }
+    toolsRequestRunning = true;
+    setError('');
+    lenStatus.textContent = 'Kalibrierung läuft …';
+    renderTools();
+    try {
+      const result = await getJSON(
+        '/api/len?action=cal&meters=' + encodeURIComponent(String(meters)),
+        { method: 'POST' });
+      lenStatus.textContent = result.message + ' (' + result.changed + ' von ' +
+        result.measured + ' Adern, Referenz ' + meters.toFixed(1).replace('.', ',') + ' m).';
+      if (Array.isArray(result.scale)) {
+        lengthScale = result.scale;
+      }
+    } catch (error) {
+      lenStatus.textContent = error.message || 'Kalibrierung fehlgeschlagen';
+    } finally {
+      toolsRequestRunning = false;
+      await refreshStatus();
+    }
+  }
+
+  async function resetLengthCal() {
+    if (toolsRequestRunning) {
+      return;
+    }
+    toolsRequestRunning = true;
+    setError('');
+    lenStatus.textContent = 'Setze Kalibrierung zurück …';
+    renderTools();
+    try {
+      const result = await getJSON('/api/len?action=reset', { method: 'POST' });
+      lenStatus.textContent = result.message || 'Kalibrierung gelöscht.';
+      if (Array.isArray(result.scale)) {
+        lengthScale = result.scale;
+      }
+    } catch (error) {
+      lenStatus.textContent = error.message || 'Zurücksetzen fehlgeschlagen';
+    } finally {
+      toolsRequestRunning = false;
+      await refreshStatus();
+    }
   }
 
   function bits(mask) {
@@ -548,6 +766,18 @@
     host.appendChild(dd);
   }
 
+  function shortQualityForPair(report, a, b) {
+    const qa = report.shortQuality ? report.shortQuality[a] : 'unknown';
+    const qb = report.shortQuality ? report.shortQuality[b] : 'unknown';
+    if (qa === 'hard' || qb === 'hard') {
+      return 'hart';
+    }
+    if (qa === 'resistive' || qb === 'resistive') {
+      return 'weich';
+    }
+    return 'unbekannt';
+  }
+
   function renderDiagnostics(report) {
     const host = byId('diagnostics');
     host.replaceChildren();
@@ -555,14 +785,23 @@
     if (report.shorts.length === 0) {
       addDiag(host, 'Kurzschlüsse', 'keine', 'good');
     } else {
-      const text = report.shorts.map((pair) => 'Ader ' + (pair[0] + 1) + ' ↔ ' + (pair[1] + 1)).join(', ');
+      const text = report.shorts
+        .map((pair) => 'Ader ' + (pair[0] + 1) + ' ↔ ' + (pair[1] + 1) +
+          ' (' + shortQualityForPair(report, pair[0], pair[1]) + ')')
+        .join(', ');
       addDiag(host, 'Kurzschlüsse', text, 'warning');
     }
 
     if (report.opens.length === 0) {
       addDiag(host, 'Unterbrechungen', 'keine', 'good');
     } else {
-      const text = report.opens.map((line) => 'Ader ' + (line + 1)).join(', ');
+      const text = report.opens.map((line) => {
+        const distance = report.openDistanceM ? report.openDistanceM[line] : null;
+        return 'Ader ' + (line + 1) +
+          (typeof distance === 'number' && isFinite(distance)
+            ? ' (Bruch ca. ' + formatMeters(distance) + ')'
+            : '');
+      }).join(', ');
       addDiag(host, 'Unterbrechungen', text, 'critical');
     }
 
@@ -581,17 +820,18 @@
     return value.toFixed(1).replace('.', ',') + ' m';
   }
 
+  const pairLabels = ['1–2', '1–2', '3–6', '4–5', '4–5', '3–6', '7–8', '7–8'];
+
   function renderLengths(report) {
     const table = byId('lengths');
     table.replaceChildren();
 
-    const pairs = [[0, 1], [2, 5], [3, 4], [6, 7]];
     const head = document.createElement('thead');
     const headRow = document.createElement('tr');
-    ['Paar', 'Länge'].forEach((label, index) => {
+    ['Ader', 'Paar', 'Länge', 'Hinweis'].forEach((label, index) => {
       const th = document.createElement('th');
       th.textContent = label;
-      if (index === 1) {
+      if (index === 2) {
         th.className = 'num';
       }
       headRow.appendChild(th);
@@ -600,33 +840,127 @@
     table.appendChild(head);
 
     const body = document.createElement('tbody');
+    const openSet = new Set(report.opens);
+    const shortPins = new Set();
+    report.shorts.forEach((pair) => {
+      shortPins.add(pair[0]);
+      shortPins.add(pair[1]);
+    });
+
     let measured = 0;
-    pairs.forEach((pair) => {
-      const values = pair.map((line) => report.lengthM[line]).filter((value) => typeof value === 'number' && isFinite(value));
-      const average = values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
-      if (average !== null) {
+    for (let line = 0; line < 8; line += 1) {
+      const length = report.lengthM[line];
+      const distance = report.openDistanceM ? report.openDistanceM[line] : null;
+      const isOpen = openSet.has(line);
+      const isShort = shortPins.has(line);
+      const quality = report.shortQuality ? report.shortQuality[line] : 'unknown';
+      const qualityLabel = quality === 'hard' ? 'hart' : (quality === 'resistive' ? 'weich' : 'unbekannt');
+
+      let value = '–';
+      let hint = 'keine Messung';
+      if (isShort) {
+        hint = 'Kurzschluss (' + qualityLabel + ')' + (isOpen ? ' · offen' : '');
+      } else if (typeof length === 'number' && isFinite(length)) {
+        value = formatMeters(length);
+        hint = 'verbunden';
         measured += 1;
+      } else if (isOpen) {
+        if (typeof distance === 'number' && isFinite(distance)) {
+          hint = 'offen · Bruch ca. ' + formatMeters(distance);
+          measured += 1;
+        } else {
+          hint = 'offen';
+        }
       }
+
       const row = document.createElement('tr');
       const name = document.createElement('td');
-      name.textContent = 'Ader ' + (pair[0] + 1) + '–' + (pair[1] + 1);
-      const value = document.createElement('td');
-      value.className = 'num';
-      value.textContent = average === null ? '–' : formatMeters(average);
-      row.appendChild(name);
-      row.appendChild(value);
+      name.textContent = 'Ader ' + (line + 1);
+      const pair = document.createElement('td');
+      pair.textContent = 'Paar ' + pairLabels[line];
+      const valueCell = document.createElement('td');
+      valueCell.className = 'num';
+      valueCell.textContent = value;
+      const hintCell = document.createElement('td');
+      hintCell.textContent = hint;
+      row.append(name, pair, valueCell, hintCell);
       body.appendChild(row);
-    });
+    }
     table.appendChild(body);
 
     const status = byId('lengthStatus');
     if (measured === 0) {
       status.hidden = false;
-      status.textContent = 'Keine Längenmessung (Kabel fehlerhaft oder Messung nicht möglich).';
+      status.textContent = 'Keine Längenmessung (Fremdspannung oder komplett offenes Kabel).';
     } else {
       status.hidden = true;
       status.textContent = '';
     }
+  }
+
+  function renderSoak(report) {
+    const card = byId('soakCard');
+    const table = byId('soakTable');
+    const verdict = byId('soakVerdict');
+    const soak = report.soak;
+    table.replaceChildren();
+    if (!soak) {
+      card.hidden = true;
+      verdict.textContent = '';
+      return;
+    }
+    card.hidden = false;
+
+    const unstable = soak.lines.filter((line) => !line.stable).length;
+    let summary = soak.runs + ' Läufe · ' +
+      (soak.allStable ? 'alle Adern stabil' : unstable + ' instabile Ader(n)');
+    if (soak.kindChanges > 0) {
+      summary += ' · ' + soak.kindChanges + ' Wechsel der Kabelart';
+    }
+    if (soak.idleActivityRuns > 0) {
+      summary += ' · ' + soak.idleActivityRuns + '× Fremdspannung';
+    }
+    verdict.textContent = summary;
+
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Ader', 'Status', 'Verbunden', 'Offen', 'Kurzschluss', 'Ziel'].forEach((label, index) => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      if (index >= 2 && index <= 4) {
+        th.className = 'num';
+      }
+      headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement('tbody');
+    soak.lines.forEach((line, index) => {
+      const row = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = 'Ader ' + (index + 1);
+      const status = document.createElement('td');
+      status.textContent = line.stable ? 'stabil' : 'instabil';
+      status.className = line.stable ? 'soak-stable' : 'soak-unstable';
+      const connected = document.createElement('td');
+      connected.className = 'num';
+      connected.textContent = line.connected + '/' + soak.runs;
+      const open = document.createElement('td');
+      open.className = 'num';
+      open.textContent = String(line.open);
+      const shorted = document.createElement('td');
+      shorted.className = 'num';
+      shorted.textContent = String(line.shorted);
+      const target = document.createElement('td');
+      const targets = bits(line.targets);
+      target.textContent = targets.length === 1
+        ? 'B' + (targets[0] + 1)
+        : (targets.length > 1 ? 'mehrere' : '–');
+      row.append(name, status, connected, open, shorted, target);
+      body.appendChild(row);
+    });
+    table.appendChild(body);
   }
 
   function renderReport(report) {
@@ -679,37 +1013,63 @@
     renderMatrix(report);
     renderDiagnostics(report);
     renderLengths(report);
+    renderSoak(report);
     byId('raw').textContent = JSON.stringify(report, null, 2);
     byId('result').hidden = false;
   }
 
-  async function runTest() {
+  function showBusy(button, label) {
+    button.replaceChildren();
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    button.appendChild(spinner);
+    button.appendChild(document.createTextNode(label));
+  }
+
+  async function runRequest(url, mode) {
     if (running) {
       return;
     }
     running = true;
+    runningMode = mode;
     setError('');
-    runBtn.disabled = true;
-    runBtn.replaceChildren();
-    const spinner = document.createElement('span');
-    spinner.className = 'spinner';
-    spinner.setAttribute('aria-hidden', 'true');
-    runBtn.appendChild(spinner);
-    runBtn.appendChild(document.createTextNode('Test läuft …'));
+    setButtonsDisabled(true);
+    if (mode === 'soak') {
+      showBusy(soakBtn, 'Wackeltest läuft …');
+      runBtn.textContent = 'Kabel testen';
+    } else {
+      showBusy(runBtn, 'Test läuft …');
+      soakBtn.textContent = 'Wackeltest (ca. 10 s)';
+    }
     renderStatus();
 
     try {
-      const report = await getJSON('/api/test', { method: 'POST' });
+      const report = await getJSON(url, { method: 'POST' });
       renderReport(report);
     } catch (error) {
       setError(error.message || 'Test fehlgeschlagen');
     } finally {
       running = false;
+      runningMode = '';
       await refreshStatus();
     }
   }
 
+  function runTest() {
+    return runRequest('/api/test', 'test');
+  }
+
+  function runSoak() {
+    return runRequest('/api/soak?runs=30&interval=300', 'soak');
+  }
+
   runBtn.addEventListener('click', runTest);
+  soakBtn.addEventListener('click', runSoak);
+  toneBtn.addEventListener('click', toggleTone);
+  lenCalBtn.addEventListener('click', calibrateLength);
+  lenResetBtn.addEventListener('click', resetLengthCal);
+  renderTools();
   refreshStatus();
   setInterval(refreshStatus, 3000);
 })();

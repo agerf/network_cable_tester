@@ -18,6 +18,7 @@
 #include "cable_test/version.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "length_cal/length_cal.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -76,9 +77,19 @@ std::string short_list(const cable_test::Analysis& analysis) {
             if (!analysis.short_between[a][b]) {
                 continue;
             }
-            char part[24];
-            std::snprintf(part, sizeof(part), "%s%zu-%zu", text.empty() ? "" : ", ", a + 1,
-                          b + 1);
+            const auto qa = analysis.short_quality[a];
+            const auto qb = analysis.short_quality[b];
+            const char* quality = "";
+            if (qa == cable_test::ShortQuality::Hard ||
+                qb == cable_test::ShortQuality::Hard) {
+                quality = " hart";
+            } else if (qa == cable_test::ShortQuality::Resistive ||
+                       qb == cable_test::ShortQuality::Resistive) {
+                quality = " weich";
+            }
+            char part[40];
+            std::snprintf(part, sizeof(part), "%s%zu-%zu%s", text.empty() ? "" : ", ", a + 1,
+                          b + 1, quality);
             text += part;
         }
     }
@@ -235,7 +246,9 @@ void DisplayUi::task_loop() {
             last_status = now;
         }
 
-        refresh_result();
+        if (!soaking_) {
+            refresh_result();
+        }
 
         if (calibration_requested_) {
             calibration_requested_ = false;
@@ -256,6 +269,38 @@ void DisplayUi::task_loop() {
         if (test_requested_) {
             test_requested_ = false;
             run_requested_test();
+        }
+
+        if (soak_requested_) {
+            soak_requested_ = false;
+            start_soak();
+        }
+
+        if (soaking_ && soak_done_.load(std::memory_order_acquire)) {
+            soaking_ = false;
+            soak_task_ = nullptr;
+
+            // Den Generationszaehler des abschliessenden Detailtests
+            // uebernehmen, damit refresh_result() nicht auf die
+            // Ergebnis-Seite zurueckspringt.
+            TestResult cached;
+            std::uint32_t generation = 0;
+            if (runner_.last_result(cached, generation)) {
+                result_generation_ = generation;
+            }
+
+            if (soak_err_ != ESP_OK && soak_summary_.runs == 0) {
+                rebuild_soak();
+                char message[80];
+                std::snprintf(message, sizeof(message), "Wackeltest fehlgeschlagen (%s)",
+                              esp_err_to_name(soak_err_));
+                show_error(message);
+            } else {
+                apply_result(soak_result_);
+                rebuild_soak();
+                show_page(kPageSoak);
+            }
+            update_status();
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));
@@ -337,11 +382,15 @@ void DisplayUi::build_ui() {
 
     pages_[kPageTest] = make_page(page_host_);
     pages_[kPageResult] = make_page(page_host_);
+    pages_[kPageSoak] = make_page(page_host_);
+    pages_[kPageTools] = make_page(page_host_);
     pages_[kPageWiring] = make_page(page_host_);
     pages_[kPageMatrix] = make_page(page_host_);
 
     build_test_page(pages_[kPageTest]);
     build_result_page(pages_[kPageResult]);
+    build_soak_page(pages_[kPageSoak]);
+    build_tools_page(pages_[kPageTools]);
     build_wiring_page(pages_[kPageWiring]);
     build_matrix_page(pages_[kPageMatrix]);
 
@@ -475,8 +524,8 @@ void DisplayUi::build_nav(lv_obj_t* screen) {
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollable(nav_, false);
 
-    static const char* const labels[kPageCount] = {"Test", "Ergebnis", "Kabel",
-                                                   "Matrix"};
+    static const char* const labels[kPageCount] = {"Test", "Ergeb.", "Wackel",
+                                                   "Tool", "Kabel", "Matrix"};
     for (int i = 0; i < kPageCount; ++i) {
         tabs_[i].self = this;
         tabs_[i].page = i;
@@ -533,8 +582,21 @@ void DisplayUi::build_test_page(lv_obj_t* page) {
     lv_obj_set_style_pad_all(error_label_, 8, 0);
     lv_obj_set_hidden(error_label_, true);
 
-    cal_btn_ = lv_button_create(page);
-    lv_obj_set_size(cal_btn_, LV_PCT(100), 40);
+    tools_row_ = lv_obj_create(page);
+    lv_obj_set_width(tools_row_, LV_PCT(100));
+    lv_obj_set_height(tools_row_, 40);
+    lv_obj_set_style_bg_opa(tools_row_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(tools_row_, 0, 0);
+    lv_obj_set_style_pad_all(tools_row_, 0, 0);
+    lv_obj_set_style_pad_column(tools_row_, 8, 0);
+    lv_obj_set_flex_flow(tools_row_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(tools_row_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(tools_row_, false);
+
+    cal_btn_ = lv_button_create(tools_row_);
+    lv_obj_set_height(cal_btn_, 40);
+    lv_obj_set_flex_grow(cal_btn_, 1);
     lv_obj_set_style_bg_color(cal_btn_, kSurface, 0);
     lv_obj_set_style_bg_opa(cal_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(cal_btn_, 10, 0);
@@ -548,6 +610,25 @@ void DisplayUi::build_test_page(lv_obj_t* page) {
     lv_obj_set_style_text_font(cal_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(cal_label, kMuted, 0);
     lv_obj_center(cal_label);
+
+    soak_btn_ = lv_button_create(tools_row_);
+    lv_obj_set_height(soak_btn_, 40);
+    lv_obj_set_flex_grow(soak_btn_, 1);
+    lv_obj_set_style_bg_color(soak_btn_, kSurface2, 0);
+    lv_obj_set_style_bg_opa(soak_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(soak_btn_, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_set_style_radius(soak_btn_, 10, 0);
+    lv_obj_set_style_border_width(soak_btn_, 1, 0);
+    lv_obj_set_style_border_color(soak_btn_, kHairline, 0);
+    lv_obj_set_style_shadow_width(soak_btn_, 0, 0);
+    lv_obj_add_event_cb(soak_btn_, soak_button_cb, LV_EVENT_CLICKED, this);
+
+    soak_btn_label_ = lv_label_create(soak_btn_);
+    lv_label_set_text(soak_btn_label_, "Wackeltest");
+    lv_obj_set_style_text_font(soak_btn_label_, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(soak_btn_label_, kInk, 0);
+    lv_obj_set_style_text_opa(soak_btn_label_, LV_OPA_60, LV_STATE_DISABLED);
+    lv_obj_center(soak_btn_label_);
 
     footer_label_ = make_label(
         page, "T568A und T568B sind elektrisch identisch. Nur spannungsfreie Kabel testen.",
@@ -637,6 +718,305 @@ void DisplayUi::build_result_page(lv_obj_t* page) {
     lv_obj_set_style_pad_row(length_area_, 4, 0);
     lv_obj_set_style_pad_column(length_area_, 8, 0);
     lv_obj_set_scrollable(length_area_, false);
+}
+
+void DisplayUi::build_soak_page(lv_obj_t* page) {
+    lv_obj_t* card = make_card(page);
+    make_card_title(card, "Wackeltest (Intermittenz)");
+    soak_verdict_ = make_label(card, "Noch kein Wackeltest.", &lv_font_montserrat_14,
+                               kMuted);
+
+    soak_area_ = lv_obj_create(card);
+    lv_obj_set_width(soak_area_, LV_PCT(100));
+    lv_obj_set_height(soak_area_, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(soak_area_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(soak_area_, 0, 0);
+    lv_obj_set_style_pad_all(soak_area_, 0, 0);
+    lv_obj_set_style_pad_row(soak_area_, 3, 0);
+    lv_obj_set_flex_flow(soak_area_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollable(soak_area_, false);
+    for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+        lv_obj_t* label = make_label(soak_area_, "", &lv_font_montserrat_14, kMuted);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
+        soak_line_labels_[line] = label;
+    }
+
+    make_label(card,
+               "Waehrend des Laufs am Stecker wackeln. Stabil = in allen Laeufen "
+               "verbunden, gleiche Zielader, kein Kurzschluss.",
+               &lv_font_montserrat_14, kMuted);
+    rebuild_soak();
+}
+
+void DisplayUi::build_tools_page(lv_obj_t* page) {
+    lv_obj_t* view_bar = lv_obj_create(page);
+    lv_obj_set_width(view_bar, LV_PCT(100));
+    lv_obj_set_height(view_bar, 32);
+    lv_obj_set_style_bg_color(view_bar, kSurface, 0);
+    lv_obj_set_style_bg_opa(view_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(view_bar, 8, 0);
+    lv_obj_set_style_border_width(view_bar, 0, 0);
+    lv_obj_set_style_pad_all(view_bar, 2, 0);
+    lv_obj_set_style_pad_column(view_bar, 4, 0);
+    lv_obj_set_flex_flow(view_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(view_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(view_bar, false);
+
+    static const char* const view_labels[2] = {"Ton", "Kalibrierung"};
+    for (int i = 0; i < 2; ++i) {
+        ToolViewTab& tab = tool_tabs_[i];
+        tab.self = this;
+        tab.view = i;
+        tab.button = lv_button_create(view_bar);
+        lv_obj_set_height(tab.button, 28);
+        lv_obj_set_flex_grow(tab.button, 1);
+        lv_obj_set_style_radius(tab.button, 6, 0);
+        lv_obj_set_style_border_width(tab.button, 0, 0);
+        lv_obj_set_style_shadow_width(tab.button, 0, 0);
+        lv_obj_add_event_cb(tab.button, tools_view_cb, LV_EVENT_CLICKED, &tab);
+
+        tab.label = lv_label_create(tab.button);
+        lv_label_set_text(tab.label, view_labels[i]);
+        lv_obj_set_style_text_font(tab.label, &lv_font_montserrat_14, 0);
+        lv_obj_center(tab.label);
+    }
+
+    tone_view_ = lv_obj_create(page);
+    lv_obj_set_width(tone_view_, LV_PCT(100));
+    lv_obj_set_flex_grow(tone_view_, 1);
+    lv_obj_set_style_bg_opa(tone_view_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(tone_view_, 0, 0);
+    lv_obj_set_style_pad_all(tone_view_, 0, 0);
+    lv_obj_set_style_pad_row(tone_view_, 8, 0);
+    lv_obj_set_flex_flow(tone_view_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollable(tone_view_, false);
+
+    cal_view_ = lv_obj_create(page);
+    lv_obj_set_width(cal_view_, LV_PCT(100));
+    lv_obj_set_flex_grow(cal_view_, 1);
+    lv_obj_set_style_bg_opa(cal_view_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cal_view_, 0, 0);
+    lv_obj_set_style_pad_all(cal_view_, 0, 0);
+    lv_obj_set_style_pad_row(cal_view_, 8, 0);
+    lv_obj_set_flex_flow(cal_view_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollable(cal_view_, false);
+
+    lv_obj_t* tone_card = make_card(tone_view_);
+    make_card_title(tone_card, "Suchton");
+
+    lv_obj_t* freq_row = lv_obj_create(tone_card);
+    lv_obj_set_width(freq_row, LV_PCT(100));
+    lv_obj_set_height(freq_row, 34);
+    lv_obj_set_style_bg_opa(freq_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(freq_row, 0, 0);
+    lv_obj_set_style_pad_all(freq_row, 0, 0);
+    lv_obj_set_style_pad_column(freq_row, 6, 0);
+    lv_obj_set_flex_flow(freq_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(freq_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(freq_row, false);
+
+    lv_obj_t* freq_minus = lv_button_create(freq_row);
+    lv_obj_set_size(freq_minus, 36, 34);
+    lv_obj_set_style_bg_color(freq_minus, kSurface2, 0);
+    lv_obj_set_style_bg_opa(freq_minus, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(freq_minus, 8, 0);
+    lv_obj_set_style_border_width(freq_minus, 1, 0);
+    lv_obj_set_style_border_color(freq_minus, kHairline, 0);
+    lv_obj_set_style_shadow_width(freq_minus, 0, 0);
+    lv_obj_add_event_cb(freq_minus, tone_freq_minus_cb, LV_EVENT_CLICKED, this);
+    lv_obj_t* freq_minus_label = lv_label_create(freq_minus);
+    lv_label_set_text(freq_minus_label, "-");
+    lv_obj_set_style_text_font(freq_minus_label, kFont20, 0);
+    lv_obj_set_style_text_color(freq_minus_label, kInk, 0);
+    lv_obj_center(freq_minus_label);
+
+    tone_freq_label_ = lv_label_create(freq_row);
+    lv_obj_set_flex_grow(tone_freq_label_, 1);
+    lv_label_set_text(tone_freq_label_, "1000 Hz");
+    lv_obj_set_style_text_font(tone_freq_label_, kFont20, 0);
+    lv_obj_set_style_text_color(tone_freq_label_, kInk, 0);
+    lv_obj_set_style_text_align(tone_freq_label_, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t* freq_plus = lv_button_create(freq_row);
+    lv_obj_set_size(freq_plus, 36, 34);
+    lv_obj_set_style_bg_color(freq_plus, kSurface2, 0);
+    lv_obj_set_style_bg_opa(freq_plus, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(freq_plus, 8, 0);
+    lv_obj_set_style_border_width(freq_plus, 1, 0);
+    lv_obj_set_style_border_color(freq_plus, kHairline, 0);
+    lv_obj_set_style_shadow_width(freq_plus, 0, 0);
+    lv_obj_add_event_cb(freq_plus, tone_freq_plus_cb, LV_EVENT_CLICKED, this);
+    lv_obj_t* freq_plus_label = lv_label_create(freq_plus);
+    lv_label_set_text(freq_plus_label, "+");
+    lv_obj_set_style_text_font(freq_plus_label, kFont20, 0);
+    lv_obj_set_style_text_color(freq_plus_label, kInk, 0);
+    lv_obj_center(freq_plus_label);
+
+    lv_obj_t* tone_row = lv_obj_create(tone_card);
+    lv_obj_set_width(tone_row, LV_PCT(100));
+    lv_obj_set_height(tone_row, 32);
+    lv_obj_set_style_bg_opa(tone_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(tone_row, 0, 0);
+    lv_obj_set_style_pad_all(tone_row, 0, 0);
+    lv_obj_set_style_pad_column(tone_row, 4, 0);
+    lv_obj_set_flex_flow(tone_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(tone_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(tone_row, false);
+
+    for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+        ToneButton& tb = tone_buttons_[line];
+        tb.self = this;
+        tb.line = line;
+        tb.button = lv_button_create(tone_row);
+        lv_obj_set_height(tb.button, 32);
+        lv_obj_set_flex_grow(tb.button, 1);
+        lv_obj_set_style_bg_color(tb.button, kSurface2, 0);
+        lv_obj_set_style_bg_opa(tb.button, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(tb.button, LV_OPA_50, LV_STATE_DISABLED);
+        lv_obj_set_style_radius(tb.button, 8, 0);
+        lv_obj_set_style_border_width(tb.button, 1, 0);
+        lv_obj_set_style_border_color(tb.button, kHairline, 0);
+        lv_obj_set_style_shadow_width(tb.button, 0, 0);
+        lv_obj_add_event_cb(tb.button, tone_button_cb, LV_EVENT_CLICKED, &tb);
+
+        tb.label = lv_label_create(tb.button);
+        char text[4];
+        std::snprintf(text, sizeof(text), "%zu", line + 1);
+        lv_label_set_text(tb.label, text);
+        lv_obj_set_style_text_font(tb.label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tb.label, kInk, 0);
+        lv_obj_center(tb.label);
+    }
+
+    tone_toggle_btn_ = lv_button_create(tone_card);
+    lv_obj_set_width(tone_toggle_btn_, LV_PCT(100));
+    lv_obj_set_height(tone_toggle_btn_, 42);
+    lv_obj_set_style_bg_color(tone_toggle_btn_, kAccentSolid, 0);
+    lv_obj_set_style_bg_opa(tone_toggle_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(tone_toggle_btn_, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_set_style_radius(tone_toggle_btn_, 10, 0);
+    lv_obj_set_style_border_width(tone_toggle_btn_, 0, 0);
+    lv_obj_set_style_shadow_width(tone_toggle_btn_, 0, 0);
+    lv_obj_add_event_cb(tone_toggle_btn_, tone_toggle_cb, LV_EVENT_CLICKED, this);
+    tone_toggle_label_ = lv_label_create(tone_toggle_btn_);
+    lv_label_set_text(tone_toggle_label_, "Ton einschalten");
+    lv_obj_set_style_text_font(tone_toggle_label_, kFont20, 0);
+    lv_obj_set_style_text_color(tone_toggle_label_, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_opa(tone_toggle_label_, LV_OPA_60, LV_STATE_DISABLED);
+    lv_obj_center(tone_toggle_label_);
+
+    tone_status_ = make_label(tone_card, "Kein Ton (nur spannungsfrei).",
+                              &lv_font_montserrat_14, kMuted);
+
+    lv_obj_t* cal_card = make_card(cal_view_);
+    make_card_title(cal_card, "Laengenkalibrierung");
+
+    lv_obj_t* cal_row = lv_obj_create(cal_card);
+    lv_obj_set_width(cal_row, LV_PCT(100));
+    lv_obj_set_height(cal_row, 34);
+    lv_obj_set_style_bg_opa(cal_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cal_row, 0, 0);
+    lv_obj_set_style_pad_all(cal_row, 0, 0);
+    lv_obj_set_style_pad_column(cal_row, 6, 0);
+    lv_obj_set_flex_flow(cal_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cal_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(cal_row, false);
+
+    lv_obj_t* minus = lv_button_create(cal_row);
+    lv_obj_set_size(minus, 36, 34);
+    lv_obj_set_style_bg_color(minus, kSurface2, 0);
+    lv_obj_set_style_bg_opa(minus, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(minus, 8, 0);
+    lv_obj_set_style_border_width(minus, 1, 0);
+    lv_obj_set_style_border_color(minus, kHairline, 0);
+    lv_obj_set_style_shadow_width(minus, 0, 0);
+    lv_obj_add_event_cb(minus, cal_ref_minus_cb, LV_EVENT_CLICKED, this);
+    lv_obj_t* minus_label = lv_label_create(minus);
+    lv_label_set_text(minus_label, "-");
+    lv_obj_set_style_text_font(minus_label, kFont20, 0);
+    lv_obj_set_style_text_color(minus_label, kInk, 0);
+    lv_obj_center(minus_label);
+
+    cal_ref_label_ = lv_label_create(cal_row);
+    lv_obj_set_flex_grow(cal_ref_label_, 1);
+    lv_label_set_text(cal_ref_label_, "10.0 m");
+    lv_obj_set_style_text_font(cal_ref_label_, kFont20, 0);
+    lv_obj_set_style_text_color(cal_ref_label_, kInk, 0);
+    lv_obj_set_style_text_align(cal_ref_label_, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t* plus = lv_button_create(cal_row);
+    lv_obj_set_size(plus, 36, 34);
+    lv_obj_set_style_bg_color(plus, kSurface2, 0);
+    lv_obj_set_style_bg_opa(plus, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(plus, 8, 0);
+    lv_obj_set_style_border_width(plus, 1, 0);
+    lv_obj_set_style_border_color(plus, kHairline, 0);
+    lv_obj_set_style_shadow_width(plus, 0, 0);
+    lv_obj_add_event_cb(plus, cal_ref_plus_cb, LV_EVENT_CLICKED, this);
+    lv_obj_t* plus_label = lv_label_create(plus);
+    lv_label_set_text(plus_label, "+");
+    lv_obj_set_style_text_font(plus_label, kFont20, 0);
+    lv_obj_set_style_text_color(plus_label, kInk, 0);
+    lv_obj_center(plus_label);
+
+    lv_obj_t* cal_btn_row = lv_obj_create(cal_card);
+    lv_obj_set_width(cal_btn_row, LV_PCT(100));
+    lv_obj_set_height(cal_btn_row, 34);
+    lv_obj_set_style_bg_opa(cal_btn_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cal_btn_row, 0, 0);
+    lv_obj_set_style_pad_all(cal_btn_row, 0, 0);
+    lv_obj_set_style_pad_column(cal_btn_row, 6, 0);
+    lv_obj_set_flex_flow(cal_btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cal_btn_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(cal_btn_row, false);
+
+    length_cal_btn_ = lv_button_create(cal_btn_row);
+    lv_obj_set_height(length_cal_btn_, 34);
+    lv_obj_set_flex_grow(length_cal_btn_, 1);
+    lv_obj_set_style_bg_color(length_cal_btn_, kSurface2, 0);
+    lv_obj_set_style_bg_opa(length_cal_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(length_cal_btn_, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_set_style_radius(length_cal_btn_, 8, 0);
+    lv_obj_set_style_border_width(length_cal_btn_, 1, 0);
+    lv_obj_set_style_border_color(length_cal_btn_, kHairline, 0);
+    lv_obj_set_style_shadow_width(length_cal_btn_, 0, 0);
+    lv_obj_add_event_cb(length_cal_btn_, length_cal_button_cb, LV_EVENT_CLICKED, this);
+    lv_obj_t* cal_btn_label = lv_label_create(length_cal_btn_);
+    lv_label_set_text(cal_btn_label, "Kalibrieren");
+    lv_obj_set_style_text_font(cal_btn_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(cal_btn_label, kInk, 0);
+    lv_obj_center(cal_btn_label);
+
+    length_cal_reset_btn_ = lv_button_create(cal_btn_row);
+    lv_obj_set_height(length_cal_reset_btn_, 34);
+    lv_obj_set_flex_grow(length_cal_reset_btn_, 1);
+    lv_obj_set_style_bg_color(length_cal_reset_btn_, kSurface2, 0);
+    lv_obj_set_style_bg_opa(length_cal_reset_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(length_cal_reset_btn_, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_set_style_radius(length_cal_reset_btn_, 8, 0);
+    lv_obj_set_style_border_width(length_cal_reset_btn_, 1, 0);
+    lv_obj_set_style_border_color(length_cal_reset_btn_, kHairline, 0);
+    lv_obj_set_style_shadow_width(length_cal_reset_btn_, 0, 0);
+    lv_obj_add_event_cb(length_cal_reset_btn_, length_cal_reset_cb, LV_EVENT_CLICKED,
+                        this);
+    lv_obj_t* reset_label = lv_label_create(length_cal_reset_btn_);
+    lv_label_set_text(reset_label, "Reset");
+    lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(reset_label, kInk, 0);
+    lv_obj_center(reset_label);
+
+    cal_status_ = make_label(cal_card, "Bereit. Sauberes Referenzkabel?",
+                             &lv_font_montserrat_14, kMuted);
+    cal_scale_label_ = make_label(cal_card, "Skalen: Default 1.00",
+                                  &lv_font_montserrat_14, kMuted);
+
+    show_tools_view(0);
+    update_tools();
 }
 
 void DisplayUi::build_wiring_page(lv_obj_t* page) {
@@ -758,6 +1138,31 @@ void DisplayUi::show_matrix_view(bool raw) {
     style_toggle(raw_toggle_, raw);
 }
 
+void DisplayUi::show_tools_view(int view) {
+    if (view != 0 && view != 1) {
+        return;
+    }
+    tools_view_ = view;
+    if (tone_view_ != nullptr) {
+        lv_obj_set_hidden(tone_view_, view != 0);
+    }
+    if (cal_view_ != nullptr) {
+        lv_obj_set_hidden(cal_view_, view != 1);
+    }
+
+    for (int i = 0; i < 2; ++i) {
+        ToolViewTab& tab = tool_tabs_[i];
+        if (tab.button != nullptr) {
+            lv_obj_set_style_bg_color(tab.button, kAccentSolid, 0);
+            lv_obj_set_style_bg_opa(tab.button,
+                                    i == view ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        }
+        if (tab.label != nullptr) {
+            lv_obj_set_style_text_color(tab.label, i == view ? kInk : kMuted, 0);
+        }
+    }
+}
+
 void DisplayUi::tab_button_cb(lv_event_t* event) {
     auto* tab = static_cast<TabButton*>(lv_event_get_user_data(event));
     if (tab != nullptr && tab->self != nullptr) {
@@ -773,7 +1178,8 @@ void DisplayUi::view_toggle_cb(lv_event_t* event) {
 }
 
 void DisplayUi::update_status() {
-    const bool busy = testing_ || runner_.busy();
+    update_tools();
+    const bool busy = testing_ || soaking_ || runner_.busy();
     const bool paired = link_.paired();
     const int rssi = static_cast<int>(link_.rssi());
 
@@ -790,7 +1196,9 @@ void DisplayUi::update_status() {
     lv_obj_set_style_bg_color(status_dot_, busy ? kWarning : (paired ? kGood : kCritical), 0);
 
     char text[48];
-    if (busy) {
+    if (soaking_) {
+        std::snprintf(text, sizeof(text), "Wackeltest laeuft ...");
+    } else if (busy) {
         std::snprintf(text, sizeof(text), "Test laeuft ...");
     } else if (paired) {
         std::snprintf(text, sizeof(text), "Verbunden / %d dBm", rssi);
@@ -801,13 +1209,122 @@ void DisplayUi::update_status() {
 
     if (last_button_disabled_) {
         lv_obj_add_state(test_btn_, LV_STATE_DISABLED);
+        lv_obj_add_state(soak_btn_, LV_STATE_DISABLED);
     } else {
         lv_obj_remove_state(test_btn_, LV_STATE_DISABLED);
+        lv_obj_remove_state(soak_btn_, LV_STATE_DISABLED);
     }
-    lv_label_set_text(test_btn_label_, busy ? "Test laeuft ..." : "Kabel testen");
+    const bool external_test = busy && !testing_ && !soaking_;
+    lv_label_set_text(test_btn_label_,
+                      (testing_ || external_test) ? "Test laeuft ..." : "Kabel testen");
+    if (soak_btn_label_ != nullptr) {
+        lv_label_set_text(soak_btn_label_, soaking_ ? "Wackeltest ..." : "Wackeltest");
+    }
+}
+
+void DisplayUi::update_tools() {
+    if (tone_status_ == nullptr) {
+        return;
+    }
+
+    const bool busy = testing_ || soaking_ || runner_.busy();
+    const int active = runner_.tone_line();
+    const std::uint32_t active_freq = runner_.tone_frequency();
+    if (active >= 0) {
+        tone_selected_line_ = static_cast<std::size_t>(active);
+        if (active_freq > 0) {
+            tone_freq_hz_ = active_freq;
+        }
+    }
+
+    for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+        ToneButton& tb = tone_buttons_[line];
+        if (tb.button == nullptr || tb.label == nullptr) {
+            continue;
+        }
+        const bool is_active = active == static_cast<int>(line);
+        const bool is_selected = tone_selected_line_ == line;
+        lv_obj_set_style_bg_color(tb.button, is_active ? kAccentSolid : kSurface2, 0);
+        lv_obj_set_style_bg_opa(tb.button, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(tb.button, (is_selected && !is_active) ? 2 : 1, 0);
+        lv_obj_set_style_border_color(tb.button, is_selected ? kAccent : kHairline, 0);
+        lv_obj_set_style_text_color(tb.label,
+                                    is_active ? lv_color_hex(0xFFFFFF) : kInk, 0);
+        if (busy) {
+            lv_obj_add_state(tb.button, LV_STATE_DISABLED);
+        } else {
+            lv_obj_remove_state(tb.button, LV_STATE_DISABLED);
+        }
+    }
+
+    char text[80];
+    if (tone_freq_label_ != nullptr) {
+        std::snprintf(text, sizeof(text), "%u Hz",
+                      static_cast<unsigned>(tone_freq_hz_));
+        lv_label_set_text(tone_freq_label_, text);
+    }
+    if (tone_toggle_btn_ != nullptr) {
+        if (busy) {
+            lv_obj_add_state(tone_toggle_btn_, LV_STATE_DISABLED);
+        } else {
+            lv_obj_remove_state(tone_toggle_btn_, LV_STATE_DISABLED);
+        }
+    }
+    if (tone_toggle_label_ != nullptr) {
+        lv_label_set_text(tone_toggle_label_,
+                          active >= 0 ? "Ton ausschalten" : "Ton einschalten");
+    }
+
+    if (active >= 0 && active < static_cast<int>(cable_test::kLineCount)) {
+        std::snprintf(text, sizeof(text), "Ton: Ader %d, %u Hz", active + 1,
+                      static_cast<unsigned>(active_freq));
+    } else {
+        std::snprintf(text, sizeof(text), "Kein Ton (nur spannungsfrei).");
+    }
+    lv_label_set_text(tone_status_, text);
+
+    if (length_cal_btn_ != nullptr) {
+        const bool disable = busy || !link_.paired();
+        if (disable) {
+            lv_obj_add_state(length_cal_btn_, LV_STATE_DISABLED);
+        } else {
+            lv_obj_remove_state(length_cal_btn_, LV_STATE_DISABLED);
+        }
+    }
+    if (length_cal_reset_btn_ != nullptr) {
+        if (busy) {
+            lv_obj_add_state(length_cal_reset_btn_, LV_STATE_DISABLED);
+        } else {
+            lv_obj_remove_state(length_cal_reset_btn_, LV_STATE_DISABLED);
+        }
+    }
+
+    if (cal_ref_label_ != nullptr) {
+        std::snprintf(text, sizeof(text), "%.1f m", cal_reference_m_);
+        lv_label_set_text(cal_ref_label_, text);
+    }
+
+    if (cal_scale_label_ != nullptr) {
+        const auto scale = length_cal::scale();
+        double min_scale = scale[0];
+        double max_scale = scale[0];
+        for (const double value : scale) {
+            min_scale = std::min(min_scale, value);
+            max_scale = std::max(max_scale, value);
+        }
+        if (std::fabs(min_scale - 1.0) < 0.0005 && std::fabs(max_scale - 1.0) < 0.0005) {
+            std::snprintf(text, sizeof(text), "Skalen: Default 1.00");
+        } else {
+            std::snprintf(text, sizeof(text), "Skalen: %.2f bis %.2f", min_scale, max_scale);
+        }
+        lv_label_set_text(cal_scale_label_, text);
+    }
 }
 
 void DisplayUi::refresh_result() {
+    if (soaking_) {
+        return;
+    }
     TestResult fresh;
     std::uint32_t generation = 0;
     if (!runner_.last_result(fresh, generation) || generation == result_generation_) {
@@ -857,13 +1374,61 @@ void DisplayUi::run_requested_test() {
 
 void DisplayUi::test_button_cb(lv_event_t* event) {
     auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
-    if (self == nullptr || self->testing_ || self->runner_.busy() || !self->link_.paired()) {
+    if (self == nullptr || self->testing_ || self->soaking_ || self->runner_.busy() ||
+        !self->link_.paired()) {
         return;
     }
     self->testing_ = true;
     self->test_requested_ = true;
     self->hide_error();
     self->update_status();
+}
+
+void DisplayUi::soak_button_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->soaking_ || self->testing_ || self->runner_.busy() ||
+        !self->link_.paired()) {
+        return;
+    }
+    self->soak_requested_ = true;
+    self->hide_error();
+    self->update_status();
+}
+
+void DisplayUi::soak_task_entry(void* arg) {
+    auto* self = static_cast<DisplayUi*>(arg);
+    if (self == nullptr) {
+        vTaskDelete(nullptr);
+        return;
+    }
+    self->soak_err_ =
+        self->runner_.run_soak(SoakConfig{}, self->soak_result_, self->soak_summary_);
+    self->soak_done_.store(true, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
+
+void DisplayUi::start_soak() {
+    if (soaking_ || testing_ || runner_.busy() || !link_.paired()) {
+        return;
+    }
+
+    soaking_ = true;
+    soak_done_.store(false, std::memory_order_relaxed);
+    soak_err_ = ESP_OK;
+    soak_summary_ = cable_test::SoakSummary{};
+    soak_result_ = TestResult{};
+    rebuild_soak();
+    show_page(kPageSoak);
+    update_status();
+
+    const BaseType_t ok =
+        xTaskCreate(soak_task_entry, "wackeltest", 6144, this, 3, &soak_task_);
+    if (ok != pdPASS) {
+        soaking_ = false;
+        soak_task_ = nullptr;
+        show_error("Wackeltest konnte nicht gestartet werden");
+        update_status();
+    }
 }
 
 void DisplayUi::apply_result(const TestResult& result) {
@@ -917,9 +1482,9 @@ void DisplayUi::show_error(const char* message) {
     lv_label_set_text(error_label_, message);
     lv_obj_set_hidden(error_label_, false);
     // Bei sichtbarer Fehlermeldung braucht die Test-Seite den Platz fuer
-    // Kalibrier-Button und Fussnote nicht mehr.
-    if (cal_btn_ != nullptr) {
-        lv_obj_set_hidden(cal_btn_, true);
+    // Werkzeugzeile und Fussnote nicht mehr.
+    if (tools_row_ != nullptr) {
+        lv_obj_set_hidden(tools_row_, true);
     }
     if (footer_label_ != nullptr) {
         lv_obj_set_hidden(footer_label_, true);
@@ -930,8 +1495,8 @@ void DisplayUi::show_error(const char* message) {
 void DisplayUi::hide_error() {
     lv_label_set_text(error_label_, "");
     lv_obj_set_hidden(error_label_, true);
-    if (cal_btn_ != nullptr) {
-        lv_obj_set_hidden(cal_btn_, false);
+    if (tools_row_ != nullptr) {
+        lv_obj_set_hidden(tools_row_, false);
     }
     if (footer_label_ != nullptr) {
         lv_obj_set_hidden(footer_label_, false);
@@ -1191,44 +1756,152 @@ void DisplayUi::rebuild_lengths() {
 
     static const int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1),
                                       LV_GRID_TEMPLATE_LAST};
-    static const int32_t row_dsc[] = {LV_GRID_CONTENT, LV_GRID_CONTENT,
-                                      LV_GRID_TEMPLATE_LAST};
+    static const int32_t row_dsc[] = {
+        LV_GRID_CONTENT, LV_GRID_CONTENT, LV_GRID_CONTENT, LV_GRID_CONTENT,
+        LV_GRID_TEMPLATE_LAST};
     lv_obj_set_layout(length_area_, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(length_area_, col_dsc, row_dsc);
 
-    static constexpr std::array<std::array<std::size_t, 2>, 4> pairs = {{
-        {0, 1}, {2, 5}, {3, 4}, {6, 7}}};
-
     int slot = 0;
-    for (const auto& pair : pairs) {
-        const auto a = result_.data.length_m[pair[0]];
-        const auto b = result_.data.length_m[pair[1]];
-        if (!a && !b) {
-            continue;
+    bool any_value = false;
+    for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+        const bool is_open = result_.analysis.open[line];
+        const bool is_short = cable_test::line_shorted(result_.analysis, line);
+        const auto length = result_.data.length_m[line];
+        const auto distance = result_.analysis.open_distance_m[line];
+        if (is_open || is_short || length) {
+            any_value = true;
         }
-        const double meters = a && b ? (*a + *b) / 2.0 : (a ? *a : *b);
+
+        char text[40];
+        lv_color_t color = kInk2;
+        if (is_short) {
+            std::snprintf(text, sizeof(text), "%zu  kurz", line + 1);
+            color = kWarning;
+        } else if (is_open) {
+            if (distance) {
+                std::snprintf(text, sizeof(text), "%zu  offen %.1f m", line + 1, *distance);
+            } else {
+                std::snprintf(text, sizeof(text), "%zu  offen", line + 1);
+            }
+            color = kCritical;
+        } else if (length) {
+            std::snprintf(text, sizeof(text), "%zu  %.1f m", line + 1, *length);
+        } else {
+            std::snprintf(text, sizeof(text), "%zu  -", line + 1);
+        }
 
         lv_obj_t* value = lv_label_create(length_area_);
-        // std::snprintf statt lv_label_set_text_fmt: LVGL ist ohne
-        // CONFIG_LV_USE_FLOAT gebaut und kann %.1f nicht formatieren.
-        char text[32];
-        std::snprintf(text, sizeof(text), "%zu-%zu  %.1f m", pair[0] + 1,
-                      pair[1] + 1, meters);
         lv_label_set_text(value, text);
         lv_obj_set_style_text_font(value, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(value, kInk2, 0);
+        lv_obj_set_style_text_color(value, color, 0);
         lv_obj_set_grid_cell(value, LV_GRID_ALIGN_START, slot % 2, 1,
                              LV_GRID_ALIGN_CENTER, slot / 2, 1);
         ++slot;
     }
 
-    if (slot == 0) {
+    if (!any_value) {
         lv_obj_t* empty = lv_label_create(length_area_);
         lv_label_set_text(empty, "Keine Messwerte");
         lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(empty, kMuted, 0);
         lv_obj_set_grid_cell(empty, LV_GRID_ALIGN_START, 0, 2, LV_GRID_ALIGN_CENTER,
                              0, 1);
+    }
+}
+
+void DisplayUi::rebuild_soak() {
+    if (soak_verdict_ == nullptr) {
+        return;
+    }
+
+    if (soaking_) {
+        lv_label_set_text(soak_verdict_, "Wackeltest laeuft ...");
+        for (lv_obj_t* label : soak_line_labels_) {
+            if (label != nullptr) {
+                lv_label_set_text(label, "");
+            }
+        }
+        return;
+    }
+
+    if (soak_summary_.runs == 0) {
+        lv_label_set_text(soak_verdict_, "Noch kein Wackeltest.");
+        for (lv_obj_t* label : soak_line_labels_) {
+            if (label != nullptr) {
+                lv_label_set_text(label, "");
+            }
+        }
+        return;
+    }
+
+    std::size_t unstable = 0;
+    for (const auto& stats : soak_summary_.lines) {
+        if (!cable_test::soak_line_stable(stats)) {
+            ++unstable;
+        }
+    }
+
+    char verdict[192];
+    if (unstable == 0 && soak_summary_.kind_changes == 0 &&
+        soak_summary_.idle_activity_runs == 0) {
+        std::snprintf(verdict, sizeof(verdict), "Alle Adern stabil (%u Laeufe).",
+                      static_cast<unsigned>(soak_summary_.runs));
+    } else {
+        std::snprintf(verdict, sizeof(verdict), "%u Laeufe, %zu instabile Ader(n).",
+                      static_cast<unsigned>(soak_summary_.runs), unstable);
+        std::size_t used = std::strlen(verdict);
+        if (soak_summary_.kind_changes > 0) {
+            std::snprintf(verdict + used, sizeof(verdict) - used, " %u Wechsel.",
+                          static_cast<unsigned>(soak_summary_.kind_changes));
+        }
+        used = std::strlen(verdict);
+        if (soak_summary_.idle_activity_runs > 0) {
+            std::snprintf(verdict + used, sizeof(verdict) - used,
+                          " %u x Fremdspannung.",
+                          static_cast<unsigned>(soak_summary_.idle_activity_runs));
+        }
+    }
+    lv_label_set_text(soak_verdict_, verdict);
+
+    for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+        lv_obj_t* label = soak_line_labels_[line];
+        if (label == nullptr) {
+            continue;
+        }
+        const cable_test::SoakLineStats& stats = soak_summary_.lines[line];
+        const bool stable = cable_test::soak_line_stable(stats);
+
+        char text[112];
+        std::snprintf(text, sizeof(text), "%zu  %s  %u/%u", line + 1,
+                      stable ? "stabil" : "instabil",
+                      static_cast<unsigned>(stats.connected),
+                      static_cast<unsigned>(stats.runs));
+        std::size_t used = std::strlen(text);
+        if (stats.open > 0) {
+            std::snprintf(text + used, sizeof(text) - used, "  %u offen",
+                          static_cast<unsigned>(stats.open));
+            used = std::strlen(text);
+        }
+        if (stats.shorted > 0) {
+            std::snprintf(text + used, sizeof(text) - used, "  %u kurz",
+                          static_cast<unsigned>(stats.shorted));
+            used = std::strlen(text);
+        }
+        const std::size_t targets = cable_test::popcount8(stats.targets);
+        if (targets == 1) {
+            for (std::size_t target = 0; target < cable_test::kLineCount; ++target) {
+                if (cable_test::has_line(stats.targets, target)) {
+                    std::snprintf(text + used, sizeof(text) - used, "  B%zu", target + 1);
+                    break;
+                }
+            }
+        } else if (targets > 1) {
+            std::snprintf(text + used, sizeof(text) - used, "  >1 Ziel");
+        }
+
+        lv_label_set_text(label, text);
+        lv_obj_set_style_text_color(label, stable ? kGood : kCritical, 0);
     }
 }
 
@@ -1564,9 +2237,150 @@ int DisplayUi::map_screen_y(int raw_x, int raw_y) const {
 
 void DisplayUi::calibration_button_cb(lv_event_t* event) {
     auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
-    if (self != nullptr) {
+    if (self != nullptr && !self->testing_ && !self->soaking_ &&
+        !self->runner_.busy()) {
         self->calibration_requested_ = true;
     }
+}
+
+void DisplayUi::tone_button_cb(lv_event_t* event) {
+    auto* tb = static_cast<ToneButton*>(lv_event_get_user_data(event));
+    if (tb == nullptr || tb->self == nullptr) {
+        return;
+    }
+    DisplayUi* self = tb->self;
+    if (self->testing_ || self->soaking_ || self->runner_.busy()) {
+        return;
+    }
+    self->tone_selected_line_ = tb->line;
+    if (self->runner_.tone_line() >= 0) {
+        // Laufenden Ton auf die neu gewaehlte Ader umschalten.
+        self->runner_.start_tone(self->tone_selected_line_, self->tone_freq_hz_);
+    }
+    self->update_tools();
+    self->update_status();
+}
+
+void DisplayUi::tone_freq_minus_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->testing_ || self->soaking_ ||
+        self->runner_.busy()) {
+        return;
+    }
+    self->tone_freq_hz_ =
+        self->tone_freq_hz_ > 500 ? self->tone_freq_hz_ - 500 : 500;
+    if (self->runner_.tone_line() >= 0) {
+        self->runner_.start_tone(self->tone_selected_line_, self->tone_freq_hz_);
+    }
+    self->update_tools();
+    self->update_status();
+}
+
+void DisplayUi::tone_freq_plus_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->testing_ || self->soaking_ ||
+        self->runner_.busy()) {
+        return;
+    }
+    self->tone_freq_hz_ =
+        self->tone_freq_hz_ < 10000 ? self->tone_freq_hz_ + 500 : 10000;
+    if (self->runner_.tone_line() >= 0) {
+        self->runner_.start_tone(self->tone_selected_line_, self->tone_freq_hz_);
+    }
+    self->update_tools();
+    self->update_status();
+}
+
+void DisplayUi::tone_toggle_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->testing_ || self->soaking_ ||
+        self->runner_.busy()) {
+        return;
+    }
+    if (self->runner_.tone_line() >= 0) {
+        self->runner_.stop_tone();
+    } else {
+        self->runner_.start_tone(self->tone_selected_line_, self->tone_freq_hz_);
+    }
+    self->update_tools();
+    self->update_status();
+}
+
+void DisplayUi::tools_view_cb(lv_event_t* event) {
+    auto* tab = static_cast<ToolViewTab*>(lv_event_get_user_data(event));
+    if (tab != nullptr && tab->self != nullptr) {
+        tab->self->show_tools_view(tab->view);
+    }
+}
+
+void DisplayUi::cal_ref_minus_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    self->cal_reference_m_ = std::max(0.5, self->cal_reference_m_ - 0.5);
+    self->update_tools();
+}
+
+void DisplayUi::cal_ref_plus_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    self->cal_reference_m_ = std::min(300.0, self->cal_reference_m_ + 0.5);
+    self->update_tools();
+}
+
+void DisplayUi::length_cal_button_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    if (self->testing_ || self->soaking_ || self->runner_.busy() ||
+        !self->link_.paired()) {
+        if (self->cal_status_ != nullptr) {
+            lv_label_set_text(self->cal_status_, "Slave getrennt oder Test laeuft.");
+        }
+        return;
+    }
+
+    if (self->cal_status_ != nullptr) {
+        lv_label_set_text(self->cal_status_, "Kalibrierung laeuft ...");
+    }
+    lv_refr_now(self->display_);
+
+    const auto outcome = length_cal::calibrate(self->runner_, self->cal_reference_m_);
+    if (self->cal_status_ != nullptr) {
+        lv_label_set_text(self->cal_status_, length_cal::status_text_de(outcome.status));
+    }
+
+    TestResult cached;
+    std::uint32_t generation = 0;
+    if (self->runner_.last_result(cached, generation)) {
+        self->result_generation_ = generation;
+        self->apply_result(cached);
+    }
+    self->update_tools();
+    self->update_status();
+}
+
+void DisplayUi::length_cal_reset_cb(lv_event_t* event) {
+    auto* self = static_cast<DisplayUi*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->testing_ || self->soaking_ ||
+        self->runner_.busy()) {
+        return;
+    }
+    const esp_err_t err = length_cal::reset();
+    if (self->cal_status_ != nullptr) {
+        lv_label_set_text(self->cal_status_,
+                          err == ESP_OK ? "Kalibrierung geloescht."
+                                        : "Zuruecksetzen fehlgeschlagen.");
+    }
+    if (err == ESP_OK) {
+        self->runner_.set_length_scale(length_cal::scale());
+    }
+    self->update_tools();
+    self->update_status();
 }
 
 lv_color_t DisplayUi::kind_color(cable_test::CableKind kind) {

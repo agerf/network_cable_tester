@@ -1,8 +1,11 @@
 #include "console_ui.hpp"
 
 #include <array>
+#include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -21,6 +24,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_wifi_ap_get_sta_list.h"
+#include "length_cal/length_cal.hpp"
 #include "nvs.h"
 #include "report/report.hpp"
 #include "test_runner/test_runner.hpp"
@@ -193,6 +197,209 @@ int cmd_status(int /*argc*/, char** /*argv*/) {
                 static_cast<int>(g_link->rssi()), g_runner->busy() ? "Test laeuft" : "bereit");
     return 0;
 }
+
+bool parse_uint(const char* text, unsigned long min, unsigned long max,
+                unsigned long& value) {
+    if (text == nullptr || *text == '\0') {
+        return false;
+    }
+    char* end = nullptr;
+    errno = 0;
+    const unsigned long parsed = std::strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || parsed < min || parsed > max) {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+bool parse_double(const char* text, double min, double max, double& value) {
+    if (text == nullptr || *text == '\0') {
+        return false;
+    }
+    char* end = nullptr;
+    errno = 0;
+    const double parsed = std::strtod(text, &end);
+    if (errno != 0 || end == text || *end != '\0' || !std::isfinite(parsed) ||
+        parsed < min || parsed > max) {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+void print_soak_usage() {
+    std::printf("Nutzung: soak [laeufe 1-200] [pause_ms 0-5000]\n"
+                "  Standard: 30 Laeufe, 300 ms Pause. Waehrend des Laufs am "
+                "Stecker wackeln.\n");
+}
+
+int cmd_soak(int argc, char** argv) {
+    if (g_runner == nullptr || g_link == nullptr) {
+        return 1;
+    }
+    if (!g_link->paired()) {
+        std::printf("Slave nicht verbunden.\n");
+        return 1;
+    }
+    if (g_runner->busy()) {
+        std::printf("Test laeuft bereits.\n");
+        return 1;
+    }
+
+    unsigned long runs = 30;
+    unsigned long interval = 300;
+    if (argc >= 2 && !parse_uint(argv[1], 1, 200, runs)) {
+        print_soak_usage();
+        return 1;
+    }
+    if (argc >= 3 && !parse_uint(argv[2], 0, 5000, interval)) {
+        print_soak_usage();
+        return 1;
+    }
+    if (argc > 3) {
+        print_soak_usage();
+        return 1;
+    }
+
+    std::printf("Wackeltest: %lu Laeufe, %lu ms Pause. Jetzt am Stecker wackeln ...\n",
+                runs, interval);
+    TestResult result;
+    cable_test::SoakSummary summary;
+    const esp_err_t err = g_runner->run_soak(
+        {static_cast<std::uint16_t>(runs), static_cast<std::uint32_t>(interval)}, result,
+        summary);
+    if (summary.runs == 0) {
+        std::printf("Wackeltest fehlgeschlagen (%s).\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    const std::string soak_text = report::format_soak_text(summary);
+    std::printf("%s", soak_text.c_str());
+    const std::string text = report::format_text(result.data, result.analysis);
+    std::printf("%s", text.c_str());
+    std::printf("JSON: %s", report::to_json(result.data, result.analysis, &summary).c_str());
+    if (err != ESP_OK) {
+        std::printf("Wackeltest nach %u Laeufen abgebrochen (%s).\n",
+                    static_cast<unsigned>(summary.runs), esp_err_to_name(err));
+        return 1;
+    }
+    return 0;
+}
+
+void print_len_status() {
+    const auto scale = length_cal::scale();
+    std::printf("Laengenkalibrierung (per Ader):\n");
+    for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+        std::printf("  Ader %zu: %.4f%s\n", line + 1, scale[line],
+                    scale[line] == 1.0 ? " (Default)" : "");
+    }
+    std::printf("Kalibrieren mit sauberem Referenzkabel: len cal <meter>\n"
+                "Zuruecksetzen: len reset\n");
+}
+
+void print_len_usage() {
+    std::printf("Nutzung:\n"
+                "  len [status]        Laengenkalibrierung anzeigen\n"
+                "  len cal <meter>     Referenzkabel vermessen und Skalen speichern\n"
+                "  len reset           Kalibrierung loeschen (Skala 1.0)\n"
+                "Die Kalibrierung braucht ein sauberes, vollstaendig verbundenes Kabel.\n");
+}
+
+int cmd_len(int argc, char** argv) {
+    if (g_runner == nullptr) {
+        return 1;
+    }
+    if (argc == 1 || (argc == 2 && std::strcmp(argv[1], "status") == 0)) {
+        print_len_status();
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "reset") == 0) {
+        const esp_err_t err = length_cal::reset();
+        if (err != ESP_OK) {
+            std::printf("Zuruecksetzen fehlgeschlagen (%s).\n", esp_err_to_name(err));
+            return 1;
+        }
+        g_runner->set_length_scale(length_cal::scale());
+        std::printf("Laengenkalibrierung geloescht (Skala 1.0).\n");
+        return 0;
+    }
+    if (argc == 3 && std::strcmp(argv[1], "cal") == 0) {
+        double reference = 0.0;
+        if (!parse_double(argv[2], 0.1, 300.0, reference)) {
+            print_len_usage();
+            return 1;
+        }
+
+        std::printf("Referenzmessung (%.2f m) laeuft ...\n", reference);
+        const auto outcome = length_cal::calibrate(*g_runner, reference);
+        std::printf("%s\n", length_cal::status_text_de(outcome.status));
+        if (outcome.status != length_cal::CalibrationStatus::Ok) {
+            return 1;
+        }
+        std::printf("Kalibrierung gespeichert (%zu von %zu Adern, Referenz %.2f m).\n",
+                    outcome.changed_lines, outcome.measured_lines, reference);
+        for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
+            if (outcome.measured_m[line]) {
+                std::printf("  Ader %zu: gemessen %.2f m, Skala %.4f\n", line + 1,
+                            *outcome.measured_m[line], outcome.scale[line]);
+            } else {
+                std::printf("  Ader %zu: keine Messung, Skala %.4f\n", line + 1,
+                            outcome.scale[line]);
+            }
+        }
+        return 0;
+    }
+    print_len_usage();
+    return 1;
+}
+
+void print_tone_usage() {
+    std::printf("Nutzung:\n"
+                "  tone <ader 1-8> [frequenz_hz 50-10000]   Suchton einschalten\n"
+                "  tone off                                 Suchton ausschalten\n"
+                "Standardfrequenz: 1000 Hz. Nur an spannungsfreien Kabeln verwenden.\n");
+}
+
+int cmd_tone(int argc, char** argv) {
+    if (g_runner == nullptr) {
+        return 1;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "off") == 0) {
+        g_runner->stop_tone();
+        std::printf("Suchton aus.\n");
+        return 0;
+    }
+    if (argc < 2 || argc > 3) {
+        print_tone_usage();
+        return 1;
+    }
+
+    unsigned long line = 0;
+    unsigned long freq = 1000;
+    if (!parse_uint(argv[1], 1, 8, line)) {
+        print_tone_usage();
+        return 1;
+    }
+    if (argc == 3 && !parse_uint(argv[2], 50, 10000, freq)) {
+        print_tone_usage();
+        return 1;
+    }
+
+    const esp_err_t err = g_runner->start_tone(static_cast<std::size_t>(line - 1),
+                                               static_cast<std::uint32_t>(freq));
+    if (err == ESP_ERR_INVALID_STATE) {
+        std::printf("Test laeuft bereits.\n");
+        return 1;
+    }
+    if (err != ESP_OK) {
+        std::printf("Suchton konnte nicht gestartet werden (%s).\n", esp_err_to_name(err));
+        return 1;
+    }
+    std::printf("Suchton auf Ader %lu, %lu Hz. 'tone off' beendet ihn.\n", line, freq);
+    std::printf("Hinweis: Nur an spannungsfreien Kabeln verwenden.\n");
+    return 0;
+}
 #else
 int cmd_status_slave(int /*argc*/, char** /*argv*/) {
     std::printf("Slave bereit; wartet auf den Master (ESP-NOW).\n");
@@ -249,6 +456,24 @@ void register_commands() {
     status_cmd.help = "Verbindungs- und Teststatus anzeigen";
     status_cmd.func = &cmd_status;
     ESP_ERROR_CHECK(esp_console_cmd_register(&status_cmd));
+
+    esp_console_cmd_t soak_cmd{};
+    soak_cmd.command = "soak";
+    soak_cmd.help = "Wackeltest: Test mehrfach wiederholen (z. B. soak 30 300)";
+    soak_cmd.func = &cmd_soak;
+    ESP_ERROR_CHECK(esp_console_cmd_register(&soak_cmd));
+
+    esp_console_cmd_t len_cmd{};
+    len_cmd.command = "len";
+    len_cmd.help = "Laengenkalibrierung anzeigen, kalibrieren oder loeschen";
+    len_cmd.func = &cmd_len;
+    ESP_ERROR_CHECK(esp_console_cmd_register(&len_cmd));
+
+    esp_console_cmd_t tone_cmd{};
+    tone_cmd.command = "tone";
+    tone_cmd.help = "Suchton auf einer Ader ein-/ausschalten";
+    tone_cmd.func = &cmd_tone;
+    ESP_ERROR_CHECK(esp_console_cmd_register(&tone_cmd));
 
     esp_console_cmd_t wifi_cmd{};
     wifi_cmd.command = "wifi";

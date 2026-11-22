@@ -89,6 +89,30 @@ Analysis analyze(const TestData& data) noexcept {
         }
     }
 
+    // Eine Kapazitätsmessung an einer offenen Ader schätzt die Entfernung
+    // bis zur Unterbrechung (vom Master aus). Bei Kurzschlüssen ist der
+    // Messwert nicht interpretierbar und bleibt leer.
+    for (std::size_t line = 0; line < kLineCount; ++line) {
+        if (analysis.open[line] && data.length_m[line]) {
+            analysis.open_distance_m[line] = data.length_m[line];
+        }
+    }
+
+    // Grobe Klassifikation der Kurzschlussart. Ein harter Kurzschluss bildet
+    // mit dem internen Pull-up (~45 kΩ) und dem Pull-down der Gegenader
+    // einen Teiler; bei 0 Ω liegt die Spannung bei etwa der halben
+    // Versorgungsspannung, bei hochohmigen Fehlern darüber. Die internen
+    // Widerstände streuen stark, daher nur eine grobe Einordnung.
+    constexpr double kHardShortMaxVoltage = 1.9;
+    for (std::size_t line = 0; line < kLineCount; ++line) {
+        if (!line_shorted(analysis, line) || !data.short_voltage_v[line]) {
+            continue;
+        }
+        analysis.short_quality[line] = *data.short_voltage_v[line] < kHardShortMaxVoltage
+                                          ? ShortQuality::Hard
+                                          : ShortQuality::Resistive;
+    }
+
     const bool wiring_clean = !analysis.idle_activity && !any_short(analysis) && !any_open(analysis);
     if (!wiring_clean || !mapping_is_bijective(analysis.mapping)) {
         analysis.kind = CableKind::Faulty;
@@ -122,6 +146,40 @@ bool any_open(const Analysis& analysis) noexcept {
         }
     }
     return false;
+}
+
+bool line_shorted(const Analysis& analysis, std::size_t line) noexcept {
+    if (line >= kLineCount) {
+        return false;
+    }
+    for (std::size_t other = 0; other < kLineCount; ++other) {
+        if (analysis.short_between[line][other]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::size_t open_count(const Analysis& analysis) noexcept {
+    std::size_t count = 0;
+    for (const bool open : analysis.open) {
+        if (open) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+const char* short_quality_name(ShortQuality quality) noexcept {
+    switch (quality) {
+    case ShortQuality::Hard:
+        return "hard";
+    case ShortQuality::Resistive:
+        return "resistive";
+    case ShortQuality::Unknown:
+    default:
+        return "unknown";
+    }
 }
 
 const char* kind_name(CableKind kind) noexcept {

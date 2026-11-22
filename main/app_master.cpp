@@ -7,6 +7,7 @@
 #include "console_ui.hpp"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "length_cal/length_cal.hpp"
 #include "rj45_port/pin_map.hpp"
 #include "rj45_port/rj45_port.hpp"
 #include "test_runner/test_runner.hpp"
@@ -28,6 +29,12 @@ void run_master() {
 
     ESP_ERROR_CHECK(init_nvs());
 
+    const esp_err_t length_cal_err = length_cal::init();
+    if (length_cal_err != ESP_OK) {
+        ESP_LOGW(kTag, "Laengenkalibrierung nicht geladen (%s), Skala 1.0",
+                 esp_err_to_name(length_cal_err));
+    }
+
     const esp_err_t wifi_cfg_err = init_wifi_config();
     if (wifi_cfg_err != ESP_OK) {
         ESP_LOGW(kTag, "WLAN-Zugangsdaten nicht geladen (%s), Defaults werden verwendet",
@@ -43,6 +50,7 @@ void run_master() {
     ESP_ERROR_CHECK(link.init());
 
     static TestRunner runner(port, link);
+    runner.set_length_scale(length_cal::scale());
     static WebUi web(runner, link);
     ESP_ERROR_CHECK(web.start());
 
