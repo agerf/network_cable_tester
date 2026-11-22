@@ -107,6 +107,14 @@ warning-free.
 - `components/web_ui/` — `esp_http_server`, serves `www/index.html` (embedded via
   `EMBED_TXTFILES`) plus `/api/status` and `/api/test`. UI edits require a
   rebuild (the file is compiled into the firmware).
+- `components/display_ui/` — master-only ILI9488 SPI driver (SPI2, 20 MHz,
+  18-bit RGB666) plus an 8×8-font text UI. The display task polls
+  `TestRunner::last_result()`, shows summary, raw-data and 8×8-matrix pages
+  (auto page change every 6 s), and starts a test on the XPT2046 `T_IRQ`
+  (GPIO 47, no coordinate calibration). Sources are guarded by
+  `CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3`; the
+  component is registered unconditionally because component CMake runs before
+  sdkconfig is loaded.
 - `main/` — role-specific app entry (only `app_master.cpp` or `app_slave.cpp` is
   selected in `main/CMakeLists.txt`), WiFi APSTA/STA setup and runtime AP
   reconfiguration (`wifi.cpp`), UART REPL (`console_ui.cpp`), AP credential
@@ -126,6 +134,17 @@ warning-free.
   (GPIO 12–18), optional XPT2046 touch on `kTouchCs`/`kTouchIrq` (21/47).
   SPI runs through the GPIO matrix, so no RJ45 pins need to move. Keep these
   constants out of `kNodeAPins`; the header enforces it at compile time.
+  `docs/schematic-variante-b.svg` documents the complete wiring: shared SPI2
+  SCK/MOSI/MISO, separate display/touch CS, 3.3 V supply with decoupling, and
+  a high-side P-MOSFET (AO3401) backlight switch driven by GPIO 18
+  (LOW = on, inverted PWM duty). An optional series R_DIM (1–4.7 Ω, 0.5 W)
+  provides fixed dimming; omit Q1/R_BL for that variant, leaving GPIO 18
+  free. The ESP32-S3 is not 5 V tolerant: 5 V VCC on the display is only
+  safe with onboard regulation/level shifting and 3.3 V logic; never expose
+  SDO/T_DO/T_IRQ to 5 V. Firmware support is implemented in
+  `components/display_ui/`; `TestRunner::last_result()` caches the last
+  successful result so the display also shows tests started by Web-UI or
+  console.
 - AP SSID/password defaults: `main/app_config.hpp`. The active credentials are
   persisted in NVS (`main/wifi_config.cpp`, namespace `wifi_cfg`) and can be
   changed at runtime via the serial `wifi` command (`wifi ssid …`,
@@ -140,6 +159,9 @@ warning-free.
 - Length calibration: `LengthConfig` in
   `components/rj45_port/include/rj45_port/rj45_port.hpp`.
 - Web UI: `components/web_ui/www/index.html` (embedded; rebuild after edits).
+- Display UI: `components/display_ui/src/display_ui.cpp` (pages, touch, status)
+  and `src/ili9488.cpp` (`kMadctl` orientation, SPI clock, init sequence,
+  backlight). Font: `src/font8x8.hpp` (public domain).
 - Role defaults: `sdkconfig.master.defaults`, `sdkconfig.slave.defaults`.
 
 ## Constraints and gotchas

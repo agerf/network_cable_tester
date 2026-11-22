@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <mutex>
 
 #include "cable_link/master_link.hpp"
@@ -29,10 +30,19 @@ public:
 
     [[nodiscard]] bool busy() const;
 
+    // Kopiert das letzte erfolgreich abgeschlossene Ergebnis. Der Zähler
+    // `generation` steigt bei jedem neuen Ergebnis, damit ein Anzeige-Task
+    // Änderungen erkennen kann, ohne die Daten selbst zu vergleichen.
+    [[nodiscard]] bool last_result(TestResult& out, std::uint32_t& generation) const;
+
 private:
     Rj45Port& port_;
     MasterLink& link_;
     mutable std::mutex mutex_;
+
+    mutable std::mutex result_mutex_;
+    TestResult last_result_{};
+    std::uint32_t result_generation_{0};
 };
 
 } // namespace cable_tester

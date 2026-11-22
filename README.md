@@ -39,6 +39,8 @@ vom Master getriebenen Pegel nicht sehen und meldet alle Adern als offen.
   benutzerdefinierte Belegung, fehlerhaft
 - Experimentelle Längenmessung pro Paar (Kapazitätsverfahren)
 - Web-UI im WLAN mit Verdrahtungsgrafik, Matrix, Diagnose und Rohdaten
+- Display am Master: Status, Testzusammenfassung, Rohdaten und 8×8-Matrix;
+  Touch startet einen Test
 - Serielle Konsole mit `test`, `status`, `wifi`, `reboot`, `help`
 - Automatisches Wieder-Pairing (Slave sendet alle 3 s ein HELLO)
 
@@ -76,36 +78,89 @@ vermeiden: GPIO 0/3/45/46 (Strapping), 19/20 (USB), 26–37 (Flash/PSRAM),
 verwendet wird: GPIO 0, 2, 5, 12, 15 (Strapping), 6–11 (Flash), 34–39 (nur
 Eingang), 1 und 3 (UART0) vermeiden.
 
-### SPI-Display am Master (reserviert)
+### SPI-Display und Touch am Master (Node A)
 
-Für ein ILI9488-Modul sind am Master folgende GPIOs reserviert; sie
-kollidieren nicht mit den RJ45-Pins 4–11 (der Slave ist eine eigene Platine
-und davon nicht betroffen):
+Ein ILI9488-Modul (3,5 Zoll, 480×320, 14-polig) hängt ausschließlich am
+Master; der Slave bleibt unverändert. Display und XPT2046-Touch teilen sich
+SPI2 (HSPI). Die GPIOs sind in `pin_map.hpp` reserviert; die Anzeige-Firmware
+ist implementiert (siehe „Display am Master“ unter Bedienung).
 
-| Funktion | GPIO |
-| --- | --- |
-| SPI SCLK | 12 |
-| SPI MOSI | 13 |
-| SPI MISO (optional, Touch) | 14 |
-| Display CS | 15 |
-| Display DC/RS | 16 |
-| Display RST | 17 |
-| Backlight (LED/PWM) | 18 |
-| Touch CS (XPT2046, optional) | 21 |
-| Touch IRQ (XPT2046, optional) | 47 |
+| Modul-Pin | Signal | ESP32-S3 | Funktion |
+| --- | --- | --- | --- |
+| 1 | VCC | 3V3 | 3,3 V; 5 V nur bei Modulen mit Regler/Level-Shiftern |
+| 2 | GND | GND | gemeinsame Masse |
+| 3 | CS | GPIO 15 | Display-Chip-Select |
+| 4 | RESET | GPIO 17 | Display-Reset |
+| 5 | DC/RS | GPIO 16 | Data/Command |
+| 6 | SDI (MOSI) | GPIO 13 | SPI2 MOSI |
+| 7 | SCK | GPIO 12 | SPI2 SCLK |
+| 8 | LED | Q1 → 3V3 | Backlight, Gate an GPIO 18 (Ein/Aus, PWM möglich); optional R_DIM |
+| 9 | SDO (MISO) | GPIO 14 | optional, nur zum Lesen |
+| 10 | T_CLK | GPIO 12 | Touch teilt SCK |
+| 11 | T_CS | GPIO 21 | Touch-Chip-Select |
+| 12 | T_DIN | GPIO 13 | Touch teilt MOSI |
+| 13 | T_DO | GPIO 14 | Touch-Datenausgang |
+| 14 | T_IRQ | GPIO 47 | Touch-IRQ; ohne T_IRQ kein Touch |
+
+Die Tabelle folgt der verbreiteten 14-poligen Modulbelegung; die
+Beschriftung auf der eigenen Platine ist maßgeblich. Kapazitive
+Touch-Varianten haben an Pin 10–14 andere Signale (C_SCL/C_SDA/C_INT) und
+werden nicht unterstützt.
+
+- **SPI:** Mode 0, Start mit 20 MHz und kurzen Leitungen; viele Module
+  laufen auch mit 27–40 MHz, das liegt aber außerhalb der
+  ILI9488-Spezifikation.
+- **Touch-Anbindung:** Die aktuelle Firmware hält `T_CS` (GPIO 21) hoch,
+  liest den XPT2046 nicht über SPI und wertet nur den IRQ `T_IRQ` an GPIO 47
+  aus (keine Koordinaten). Der XPT2046 selbst ist für maximal 2 MHz (Mode 0)
+  spezifiziert; falls er später über den gemeinsamen SPI-Bus gelesen wird,
+  muss der Takt pro SPI-Device auf 1–2 MHz stehen, während das Display mit
+  20 MHz läuft.
+- **Gemeinsamer Bus:** GPIO 12/13/14 werden von Display und Touch genutzt,
+  nur CS ist getrennt (GPIO 15 bzw. 21). SDO und T_DO dürfen beide auf
+  GPIO 14 liegen, weil immer nur ein Chip selektiert ist.
+- **5-V-Betrieb:** VCC = 5 V nur, wenn das Modul einen eigenen 3,3-V-Regler
+  und Level-Shifter hat und die Logikpins nachweislich 3,3 V führen. Der
+  ESP32-S3 ist **nicht 5-V-tolerant**; 5 V an SDO, T_DO oder T_IRQ können
+  die GPIOs zerstören. Im Zweifel das Modul mit 3,3 V betreiben oder
+  Level-Shifter (z. B. TXS0108E) für alle Logikleitungen vorsehen. Bei
+  5 V VCC den Backlight-LED-Pin nicht über den 3,3-V-Q1 schalten: LED
+  direkt an 5 V oder einen 5-V-tauglichen High-Side-Treiber verwenden.
+- **Backlight:** Der LED-Pin wird über einen P-MOSFET (z. B. AO3401)
+  high-side an 3,3 V geschaltet. Gate an GPIO 18, 10-kΩ-Pull-up
+  Gate–Source; GPIO 18 LOW = an. PWM ist hardware-seitig möglich (Duty
+  invertiert), die aktuelle Firmware schaltet nur ein/aus. Viele Module
+  haben den LED-Vorwiderstand an Bord; sonst ca. 33 Ω in Reihe und den
+  Strom messen. Ohne Dimmen kann LED direkt an 3,3 V. Bei 5-V-Modulversorgung
+  LED entweder fest an 5 V oder einen passenden High-Side-Treiber ergänzen;
+  der dargestellte Q1 ist für 3,3 V ausgelegt.
+- **Feste Dimmung:** Statt Q1/PWM kann ein Serienwiderstand **R_DIM**
+  (1–4,7 Ω, 0,5 W) zwischen 3V3 und LED-Pin liegen. Bei 3,3 V ist die
+  Wirkung stark (LED-Flussspannung nahe der Rail), den Wert daher mit
+  Potentiometer/Strommessung bestimmen. Q1 und R_BL entfallen dann,
+  GPIO 18 bleibt frei.
+- **Entkopplung:** 100 nF und 10 µF modulnah zwischen VCC und GND.
+- **GPIO 47:** Nicht auf jedem Dev-Board herausgeführt. Dann T_IRQ offen
+  lassen; Touch entfällt, Anzeige, Web-UI und Konsole funktionieren weiter.
+  Alternativ `display::kTouchIrq` in `pin_map.hpp` auf einen freien GPIO
+  legen.
+- **MicroSD-Slot:** bleibt ungenutzt; dessen CS nicht anschließen.
 
 Die Konstanten stehen in `pin_map.hpp` im Namensraum `display`; ein
 `static_assert` verhindert, dass sie mit `kNodeAPins` kollidieren. Der
 SPI-Bus läuft über die GPIO-Matrix — für ein ILI9488 ist das unkritisch.
 Wenn das Display anders verdrahtet wird, nur die `display::…`-Konstanten
-anpassen; die RJ45-Pins bleiben unverändert.
+anpassen; die RJ45-Pins bleiben unverändert. Die komplette Verdrahtung
+inklusive Backlight-Schalter zeigt der erweiterte Schaltplan unter
+Variante B.
 
 ## Schaltplan und Schutzbeschaltung
 
-Beide Nodes sind elektrisch identisch; die Rolle steckt nur in der Firmware.
-Jede der acht RJ45-Adern führt über einen **1-kΩ-Serienwiderstand** auf den
-GPIO (GPIO 4–11). Der Widerstand sitzt auf der Platine zwischen RJ45-Kontakt
-und GPIO.
+Der RJ45-Teil beider Nodes ist elektrisch identisch; die Rolle steckt nur in
+der Firmware. Das Display/Touch-Modul sitzt ausschließlich am Master (siehe
+Variante B unten). Jede der acht RJ45-Adern führt über einen
+**1-kΩ-Serienwiderstand** auf den GPIO (GPIO 4–11). Der Widerstand sitzt auf
+der Platine zwischen RJ45-Kontakt und GPIO.
 
 **Wirkung der 1-kΩ-Widerstände:**
 
@@ -134,18 +189,33 @@ V<sub>IH</sub> = 2,475 V.
 > nie direkt an den GPIOs anliegen.
 
 Versorgung: Beide Dev-Boards werden über USB mit 5 V versorgt; die 3,3-V-Rail
-entsteht auf dem Board. Die USB-GNDs beider Nodes müssen verbunden sein
-(gleicher Host/Hub oder eine GND-Leitung), sonst funktioniert die
-Pegelmessung nicht. Die Schaltbilder sind Prinzipschaltbilder (SVG), keine
-Layoutvorlage. Beide Schaltungen sind dokumentierte Entwürfe; auf echter
-Hardware ist noch keine der beiden Varianten erprobt.
+entsteht auf dem Board. Das Display zieht mit Backlight ca. 90–150 mA; bei
+instabiler Anzeige einen aktiven USB-Hub oder eine separate 5-V-Versorgung
+verwenden. Die USB-GNDs beider Nodes müssen verbunden sein (gleicher
+Host/Hub oder eine GND-Leitung), sonst funktioniert die Pegelmessung nicht.
+Die Schaltbilder sind Prinzipschaltbilder (SVG), keine Layoutvorlage. Beide
+Schaltungen sind dokumentierte Entwürfe; auf echter Hardware ist noch keine
+der beiden Varianten erprobt.
 
 ### Variante B — nur 1-kΩ-Serienwiderstände
 
 Minimalaufbau für passive Kabel: pro Ader ein 1-kΩ-Widerstand je Node, sonst
-keine Bauteile am RJ45-Kontakt.
+keine Bauteile am RJ45-Kontakt. Am Master kommt das Display-/Touch-Modul mit
+seinem Backlight-Schalter hinzu; der untere Abschnitt des Schaltbilds zeigt
+diese Erweiterung.
 
 ![Variante B — nur 1-kΩ-Serienwiderstände](docs/schematic-variante-b.svg)
+
+| Bauteil | Typ/Wert | Anzahl (Paar) | Funktion |
+| --- | --- | --- | --- |
+| R1–R8 | 1 kΩ, 1 %, 0,25 W | 8 | Serienwiderstand je Ader (Node A) |
+| R1′–R8′ | 1 kΩ, 1 %, 0,25 W | 8 | Serienwiderstand je Ader (Node B) |
+| Display | ILI9488 480×320 + XPT2046 | 1 | Anzeige/Touch, nur Master |
+| Q1 | AO3401 (P-MOSFET, SOT-23) | optional | Backlight-Schalter (PWM), nur Master |
+| R_BL | 10 kΩ | optional | Gate-Pull-up für Q1, nur Master |
+| R_DIM | 1–4,7 Ω, 0,5 W | optional | feste Dimmung statt PWM, nur Master |
+| C1 | 100 nF | 1 | Entkopplung Display, nur Master |
+| C2 | 10 µF | 1 | Entkopplung Display, nur Master |
 
 - Bestückung: 8 × 1 kΩ pro Board; im Bild heißen die Slave-Widerstände zur
   Unterscheidung R1′–R8′.
@@ -318,18 +388,54 @@ Auf diesem Rechner liegt VS Code unter
 
 1. Beide Tester mit gemeinsamer Masse mit Strom versorgen.
 2. Das zu prüfende Kabel zwischen die beiden RJ45-Buchsen stecken.
-3. Mit dem WLAN **`CableTester`** verbinden (Passwort **`cabletest123`**) und
-   <http://192.168.4.1/> öffnen.
-4. Oben muss „Slave verbunden“ stehen; dann **Kabel testen** drücken.
-5. Alternativ seriell mit 115200 8N1: `test` startet einen Test, `status`
-   zeigt den Link, `wifi` zeigt/ändert SSID/Passwort, `reboot` startet das
-   Board neu, `help` listet die Kommandos.
+3. Am Master startet eine Berührung des Displays den Test, sobald der Slave
+   verbunden ist. Das Ergebnis erscheint auf dem Display; die Seiten wechseln
+   automatisch zwischen Zusammenfassung, Rohdaten und Matrix.
+4. Alternativ mit dem WLAN **`CableTester`** verbinden (Passwort
+   **`cabletest123`**), <http://192.168.4.1/> öffnen, oben muss „Slave
+   verbunden“ stehen; dann **Kabel testen** drücken.
+5. Oder seriell mit 115200 8N1: `test` startet einen Test, `status` zeigt den
+   Link, `wifi` zeigt/ändert SSID/Passwort, `reboot` startet das Board neu,
+   `help` listet die Kommandos.
 
 Auf dem ESP32-S3 läuft die serielle Konsole standardmäßig über **UART0**
 (UART-USB-Port des Dev-Boards). Für den **nativen USB-Port** des S3 in
 `menuconfig` `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` setzen (oder in
 `sdkconfig.master` eintragen) und neu bauen; die Firmware unterstützt beide
 Konsolentypen. Die Web-UI funktioniert unabhängig davon.
+
+### Display am Master
+
+Das ILI9488 wird beim Boot automatisch initialisiert. Angezeigt werden:
+
+- **Kopfzeile:** Firmware-Version, WLAN-SSID, Slave-Status und RSSI
+- **Zusammenfassung:** Kabeltyp, Verdrahtung, Kurzschlüsse, Unterbrechungen
+  und Längen (aus `report::format_text`)
+- **Rohdaten:** Idle-Masken, alle acht Messrunden (lokal/remote) und die
+  Längen je Ader
+- **Matrix:** 8×8-Matrix A→B (X = HIGH am Slave) plus lokale Masken; nach
+  einem Ergebnis wechseln die drei Seiten alle 6 s
+- **Fußzeile:** Touch-Hinweis und Seitenzahl
+
+**Touch:** Es wird nur der XPT2046-`T_IRQ` an GPIO 47 ausgewertet (keine
+Koordinatenkalibrierung). Eine Berührung startet einen neuen Test, wenn der
+Slave verbunden und kein Test aktiv ist. Ist `T_IRQ` nicht verdrahtet, bleibt
+die Anzeige inklusive automatischem Seitenwechsel nutzbar; Tests lassen sich
+über Web-UI oder Konsole starten und werden trotzdem angezeigt.
+
+**Anpassen** (`components/display_ui/src/ili9488.cpp`):
+
+- Bild gedreht/gespiegelt: `kMadctl` ändern — `0x28` = Landscape/BGR,
+  `0x20` = Landscape/RGB, `0x68` = Landscape/BGR/X gespiegelt,
+  `0xE8` = 180°.
+- Farben vertauscht: BGR-Bit entfernen (`0x20` statt `0x28`).
+- Bild invertiert: `cmd(0x21)` (INVON) in `Ili9488::init()` ergänzen.
+- Streifen/Artefakte: `clock_speed_hz` in `Ili9488::init()` von 20 MHz auf
+  z. B. 10 MHz reduzieren.
+
+Ohne angeschlossenes Display startet die Firmware normal weiter (die Anzeige
+bleibt leer); Web-UI und Konsole bleiben unverändert. Schlägt die
+SPI-Initialisierung fehl, steht ein Warnhinweis im Log.
 
 ### WLAN-Zugangsdaten ändern
 
@@ -417,6 +523,7 @@ components/
   test_runner/   Ablaufsteuerung der Messung
   report/        JSON- und Text-Report
   web_ui/        HTTP-Server + eingebettete Single-Page-UI
+  display_ui/    ILI9488-SPI-Treiber + Display-Oberfläche (nur Master)
 main/            Rollenwahl, WLAN-AP/STA, Konsole, app_main
 host_tests/      Host-Tests für die Analyse
 scripts/         idf_role.sh (Build/Flash pro Rolle)
@@ -424,8 +531,9 @@ scripts/         idf_role.sh (Build/Flash pro Rolle)
 docs/            SVG-Schaltbilder für das README
 ```
 
-Datenfluss Master: Web-UI/Konsole → `TestRunner` → `Rj45Port` (treiben/lesen) +
-`MasterLink` (Slave-Abfrage) → `cable_test::analyze` → `report` → HTTP/Seriell.
+Datenfluss Master: Display/Web-UI/Konsole → `TestRunner` → `Rj45Port`
+(treiben/lesen) + `MasterLink` (Slave-Abfrage) → `cable_test::analyze` →
+`report` → Display/HTTP/Seriell.
 
 ## Tests
 
@@ -460,10 +568,16 @@ scripts/idf_role.sh slave build
 | Monitor: „device reports readiness … multiple access on port“ / Port verschwindet | USB-Kabel/-Port/Stromversorgung prüfen. Das Kernel-Log (`journalctl -k -f`) zeigt dann `USB disconnect`, `error -71` und Neu-Erkennung. Laufenden Monitor beenden und den stabilen Pfad `/dev/serial/by-path/…` verwenden. Der Portname (`ttyACM0` ↔ `ttyACM1`) kann sich beim Neu-Enumerieren ändern; `idf.py monitor` folgt ihm nicht. |
 | S3: keine Logs/Konsole über den nativen USB-Port | Die Konsole läuft per Default über UART0. Für USB Serial/JTAG `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` setzen und neu bauen; die Web-UI ist davon unabhängig. |
 | `phy_init: failed to load RF calibration data` | Normal beim ersten Boot nach dem Flashen (vollständige RF-Kalibrierung). Erst kritisch, wenn das Board dabei resetet oder der USB-Port verschwindet – dann Stromversorgung/Cable prüfen. |
+| Display bleibt dunkel/weiß | Backlight prüfen (Q1-Gate an GPIO 18, LOW = an; ohne Q1 LED direkt an 3V3), 3,3-V-Versorgung und SPI-Leitungen 12–17 kontrollieren. Im Log erscheint `ILI9488 initialisiert …` bzw. ein Fehler. |
+| Display-Bild gedreht, gespiegelt oder Farben vertauscht | `kMadctl` in `components/display_ui/src/ili9488.cpp` anpassen (`0x28` Landscape/BGR, `0x20` Landscape/RGB, `0x68` X gespiegelt, `0xE8` 180°). |
+| Display zeigt Streifen/Artefakte | SPI-Takt in `ili9488.cpp` von 20 MHz auf 10 MHz reduzieren und Leitungen kurz halten. |
+| Touch startet keinen Test | `T_IRQ` des Moduls muss an GPIO 47 liegen (interne Pull-ups aktiv). Ohne T_IRQ Anzeige/Seitenwechsel weiter nutzen und Tests über Web-UI/Konsole starten. |
 | Build-Fehler `cjson`/`driver/gpio.h` | ESP-IDF 6.1.x verwenden (dieses Projekt nutzt `esp_driver_gpio` und kein cJSON) |
 
 ## Status
 
 Build beider Rollen (Master und Slave, jeweils `esp32s3`) mit ESP-IDF 6.1.1 und
 die Host-Tests sind verifiziert. Die Inbetriebnahme auf echter Hardware (beide
-Boards, reales Kabel) steht noch aus.
+Boards, reales Kabel) steht noch aus. Display und Touch (ILI9488 + XPT2046)
+sind implementiert (Anzeige, Touch-Teststart, automatischer Seitenwechsel);
+die Inbetriebnahme auf echter Display-Hardware steht ebenfalls noch aus.

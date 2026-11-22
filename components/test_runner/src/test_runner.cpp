@@ -96,7 +96,23 @@ esp_err_t TestRunner::run(TestResult& out) {
         out.analysis = cable_test::analyze(out.data);
     }
 
+    {
+        std::lock_guard<std::mutex> result_lock(result_mutex_);
+        last_result_ = out;
+        ++result_generation_;
+    }
+
     return ESP_OK;
+}
+
+bool TestRunner::last_result(TestResult& out, std::uint32_t& generation) const {
+    std::lock_guard<std::mutex> lock(result_mutex_);
+    if (result_generation_ == 0) {
+        return false;
+    }
+    out = last_result_;
+    generation = result_generation_;
+    return true;
 }
 
 } // namespace cable_tester

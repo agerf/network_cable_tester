@@ -1,5 +1,7 @@
 #include "app.hpp"
 
+#include "sdkconfig.h"
+
 #include "cable_link/master_link.hpp"
 #include "cable_test/version.hpp"
 #include "console_ui.hpp"
@@ -11,6 +13,10 @@
 #include "web_ui/web_ui.hpp"
 #include "wifi.hpp"
 #include "wifi_config.hpp"
+
+#if CONFIG_IDF_TARGET_ESP32S3
+#include "display_ui/display_ui.hpp"
+#endif
 
 namespace cable_tester::app {
 namespace {
@@ -39,6 +45,17 @@ void run_master() {
     static TestRunner runner(port, link);
     static WebUi web(runner, link);
     ESP_ERROR_CHECK(web.start());
+
+#if CONFIG_IDF_TARGET_ESP32S3
+    // Das Display ist optional: ohne angeschlossenes Modul läuft der Rest
+    // (Web-UI, Konsole, ESP-NOW) unverändert weiter.
+    static DisplayUi display(runner, link, ap_ssid());
+    const esp_err_t display_err = display.start();
+    if (display_err != ESP_OK) {
+        ESP_LOGW(kTag, "Display nicht verfügbar (%s); Web-UI/Konsole laufen weiter",
+                 esp_err_to_name(display_err));
+    }
+#endif
 
     console_ui::start(runner, link);
 

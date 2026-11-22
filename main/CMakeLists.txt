@@ -8,6 +8,7 @@ idf_component_register(
         test_runner
         report
         web_ui
+        display_ui
         console
         esp_wifi
         esp_netif
