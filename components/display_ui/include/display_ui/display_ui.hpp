@@ -66,7 +66,8 @@ private:
                       const char* name, const char* value, lv_color_t value_color);
 
     static void flush_cb(lv_display_t* display, const lv_area_t* area, std::uint8_t* px_map);
-    void flush(const lv_area_t* area, std::uint8_t* px_map);
+    bool flush(const lv_area_t* area, std::uint8_t* px_map);
+    static void flush_wait_cb(lv_display_t* display);
     static void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
     void read_touch(lv_indev_data_t* data);
     static void test_button_cb(lv_event_t* event);
@@ -92,8 +93,11 @@ private:
 
     lv_display_t* display_{nullptr};
     lv_indev_t* indev_{nullptr};
-    std::array<std::uint16_t, kFlushWidth * kFlushHeight> lv_buffer_{};
-    std::array<std::uint8_t, kFlushWidth * kFlushHeight * 3> flush_buffer_{};
+    // Zwei Zeichenpuffer: LVGL rendert den naechsten Streifen, waehrend der
+    // vorherige per DMA zum Display geht.
+    alignas(4) std::array<std::uint16_t, kFlushWidth * kFlushHeight> lv_buffer_a_{};
+    alignas(4) std::array<std::uint16_t, kFlushWidth * kFlushHeight> lv_buffer_b_{};
+    alignas(4) std::array<std::uint8_t, kFlushWidth * kFlushHeight * 3> flush_buffer_{};
 
     lv_obj_t* scroll_{nullptr};
     lv_obj_t* hero_card_{nullptr};

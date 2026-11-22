@@ -107,9 +107,9 @@ warning-free.
 - `components/web_ui/` — `esp_http_server`, serves `www/index.html` (embedded via
   `EMBED_TXTFILES`) plus `/api/status` and `/api/test`. UI edits require a
   rebuild (the file is compiled into the firmware).
-- `components/display_ui/` — master-only ILI9488 SPI driver (SPI2, 20 MHz,
-  18-bit RGB666, portrait 320×480) and a graphical LVGL 9.x UI styled after
-  the web UI. LVGL and the XPT2046 share SPI2; touch coordinates come from
+- `components/display_ui/` — master-only ILI9488 SPI driver (SPI2, 40 MHz,
+  18-bit RGB666, portrait 320×480, asynchronous DMA flush with two LVGL
+  partial buffers) and a graphical LVGL 9.x UI styled after the web UI. LVGL and the XPT2046 share SPI2; touch coordinates come from
   XPT2046 X/Y readings (2 MHz) with `T_IRQ` as a fast hint. First boot runs a
   four-point calibration stored in NVS namespace `touch_cal` (`touchcal`
   console command resets it). The display task polls

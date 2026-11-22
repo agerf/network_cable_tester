@@ -109,9 +109,10 @@ Beschriftung auf der eigenen Platine ist maßgeblich. Kapazitive
 Touch-Varianten haben an Pin 10–14 andere Signale (C_SCL/C_SDA/C_INT) und
 werden nicht unterstützt.
 
-- **SPI:** Mode 0, Start mit 20 MHz und kurzen Leitungen; viele Module
-  laufen auch mit 27–40 MHz, das liegt aber außerhalb der
-  ILI9488-Spezifikation. Der XPT2046 wird mit 2 MHz am selben Bus gelesen.
+- **SPI:** Mode 0, 40 MHz und kurze Leitungen. Das liegt oberhalb der
+  ILI9488-Spezifikation von 20 MHz; die meisten Module laufen stabil damit,
+  bei Streifen/Artefakten in `ili9488.cpp` auf 27 oder 20 MHz reduzieren.
+  Der XPT2046 wird mit 2 MHz am selben Bus gelesen.
 - **Touch-Anbindung:** Display und XPT2046 hängen am gemeinsamen SPI2-Bus;
   `T_CS` (GPIO 21) verwaltet der SPI-Treiber, die Koordinaten kommen über
   X/Y-Konvertierungen (max. 2 MHz, Mode 0). `T_IRQ` (GPIO 47) dient als
@@ -448,8 +449,8 @@ Alternativ den Button **„Touch kalibrieren“** am Ende der Display-Seite nutz
   gespiegelt, `0xC8` = Porträt/BGR 180°.
 - Farben vertauscht: BGR-Bit entfernen (z. B. `0x40` statt `0x48`).
 - Bild invertiert: `cmd(0x21)` (INVON) in `Ili9488::init()` ergänzen.
-- Streifen/Artefakte: `clock_speed_hz` in `Ili9488::init()` von 20 MHz auf
-  z. B. 10 MHz reduzieren.
+- Streifen/Artefakte: `kSpiClockHz` in `ili9488.cpp` von 40 MHz auf 27 oder
+  20 MHz reduzieren und die Leitungen kurz halten.
 
 Ohne angeschlossenes Display startet die Firmware normal weiter (die Anzeige
 bleibt leer); Web-UI und Konsole bleiben unverändert.
@@ -604,7 +605,7 @@ scripts/idf_role.sh slave build
 | `phy_init: failed to load RF calibration data` | Normal beim ersten Boot nach dem Flashen (vollständige RF-Kalibrierung). Erst kritisch, wenn das Board dabei resetet oder der USB-Port verschwindet – dann Stromversorgung/Cable prüfen. |
 | Display bleibt dunkel/weiß | Backlight prüfen (Q1-Gate an GPIO 18, LOW = an; ohne Q1 LED direkt an 3V3), 3,3-V-Versorgung und SPI-Leitungen 12–17 kontrollieren. Im Log erscheint `ILI9488 initialisiert …` bzw. ein Fehler. |
 | Display-Bild gedreht, gespiegelt oder Farben vertauscht | `kMadctl` in `components/display_ui/src/ili9488.cpp` anpassen (`0x48` Porträt/BGR/X gespiegelt, `0x08` Porträt/BGR, `0x88` Y gespiegelt, `0xC8` 180°). |
-| Display zeigt Streifen/Artefakte | SPI-Takt in `ili9488.cpp` von 20 MHz auf 10 MHz reduzieren und Leitungen kurz halten. |
+| Display zeigt Streifen/Artefakte | SPI-Takt (`kSpiClockHz` in `ili9488.cpp`) von 40 MHz auf 27 oder 20 MHz reduzieren und Leitungen kurz halten. |
 | Touch trifft daneben oder startet nichts | Vier-Punkt-Kalibrierung erneut ausführen (Button „Touch kalibrieren“ oder seriell `touchcal` + `reboot`). T_CLK/T_CS/T_DIN/T_DO müssen wie im Schaltplan verdrahtet sein; `T_IRQ` ist optional. Die Rohwerte stehen im Log (`Touch raw x=…`). |
 | Touch-Kalibrierung hängt/keine Berührung erkannt | Prüfen, ob der XPT2046 überhaupt am SPI-Bus antwortet (T_CS/T_CLK/T_DIN/T_DO, 3,3 V). Nach ca. 10 s fällt die Firmware auf die Standardabbildung zurück; die Anzeige bleibt nutzbar. |
 | Log zeigt `raw x=0 y=0` bzw. `z1=0 z2=0` | Der XPT2046 liefert keine SPI-Daten. **T_CS (GPIO 21)** und **T_DO (GPIO 14)** prüfen; **Pin 9 (Display-SDO) testweise von GPIO 14 abklemmen**, nur Pin 13 (T_DO) anschließen. T_CLK muss an GPIO 12, T_DIN an GPIO 13. Die Modul-Pinreihenfolge kann abweichen — Beschriftung kontrollieren. Nur `T_IRQ` reicht nicht. |

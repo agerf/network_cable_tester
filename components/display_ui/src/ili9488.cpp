@@ -21,6 +21,11 @@ namespace {
 // orientieren sich am MIT-lizenzierten atanisoft/esp_lcd_ili9488-Treiber.
 constexpr char kTag[] = "ili9488";
 
+// 40 MHz statt der im ILI9488-Datenblatt genannten 20 MHz: die meisten
+// Module laufen damit stabil und die Bildwiederholrate verdoppelt sich.
+// Bei Bildfehlern (Streifen/Flackern) hier auf 27 oder 20 MHz reduzieren.
+constexpr int kSpiClockHz = 40 * 1000 * 1000;
+
 // 0x28 = MV (X/Y tauschen, Landscape) + BGR. Bei gespiegelter/verdrehter
 // Anzeige hier experimentieren: 0x20 = Landscape/RGB, 0xE8 = 180 Grad.
 constexpr std::uint8_t kMadctl[1] = {0x48}; // Porträt, X gespiegelt, BGR
@@ -179,7 +184,7 @@ esp_err_t Ili9488::init() {
     }
 
     spi_device_interface_config_t device_config{};
-    device_config.clock_speed_hz = 20 * 1000 * 1000;
+    device_config.clock_speed_hz = kSpiClockHz;
     device_config.mode = 0;
     device_config.spics_io_num = board::display::kCs;
     device_config.queue_size = 1;
@@ -243,35 +248,74 @@ esp_err_t Ili9488::init() {
 
     backlight(true);
     initialized_ = true;
-    ESP_LOGI(kTag, "ILI9488 initialisiert (%dx%d, SPI2, 20 MHz)", kWidth, kHeight);
+    ESP_LOGI(kTag, "ILI9488 initialisiert (%dx%d, SPI2, %d MHz)", kWidth, kHeight,
+             kSpiClockHz / 1000000);
     return ESP_OK;
 }
 
-void Ili9488::draw_rgb666(int x, int y, int w, int h, const std::uint8_t* data) {
+esp_err_t Ili9488::draw_rgb666_async(int x, int y, int w, int h,
+                                     const std::uint8_t* data) {
     if (!initialized_ || data == nullptr || w <= 0 || h <= 0) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
     if (x < 0 || y < 0 || x + w > kWidth || y + h > kHeight) {
-        return;
+        return ESP_ERR_INVALID_ARG;
     }
-    if (set_window(x, y, w, h) != ESP_OK) {
-        return;
+    if (draw_pending_ && wait_draw() != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = spi_device_acquire_bus(dev_, portMAX_DELAY);
+    esp_err_t err = set_window(x, y, w, h);
     if (err != ESP_OK) {
-        return;
+        return err;
     }
+
+    // Bus bis zum Abschluss des DMA-Transfers halten, damit die Folge
+    // Befehl/Daten nicht von einem Touch-Zugriff unterbrochen wird.
+    err = spi_device_acquire_bus(dev_, portMAX_DELAY);
+    if (err != ESP_OK) {
+        return err;
+    }
+
     const std::uint8_t command = kCmdMemoryWrite;
     err = transfer(&command, 1, true, false);
     if (err == ESP_OK) {
-        err = transfer(data, static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3,
-                       false, true);
+        gpio_set_level(board::display::kDc, 1);
+
+        draw_transaction_ = {};
+        draw_transaction_.length =
+            static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3 * 8;
+        draw_transaction_.tx_buffer = data;
+
+        err = spi_device_queue_trans(dev_, &draw_transaction_, portMAX_DELAY);
+        if (err == ESP_OK) {
+            draw_pending_ = true;
+        } else {
+            // CS wurde mit KEEP_ACTIVE gehalten; ein Dummy-Byte gibt die
+            // Leitung wieder frei, damit der naechste Zugriff sauber startet.
+            const std::uint8_t dummy = 0;
+            (void)transfer(&dummy, 1, false, true);
+        }
     }
     spi_device_release_bus(dev_);
+
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "draw_rgb666: %s", esp_err_to_name(err));
+        ESP_LOGE(kTag, "draw_rgb666_async: %s", esp_err_to_name(err));
     }
+    return err;
+}
+
+esp_err_t Ili9488::wait_draw() {
+    if (!draw_pending_) {
+        return ESP_OK;
+    }
+    spi_transaction_t* result = nullptr;
+    const esp_err_t err = spi_device_get_trans_result(dev_, &result, portMAX_DELAY);
+    draw_pending_ = false;
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "DMA-Transfer: %s", esp_err_to_name(err));
+    }
+    return err;
 }
 
 void Ili9488::fill_rect(int x, int y, int w, int h, std::uint16_t rgb565) {

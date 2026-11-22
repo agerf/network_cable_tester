@@ -161,8 +161,9 @@ esp_err_t DisplayUi::init_lvgl() {
     lv_display_set_default(display_);
     lv_display_set_user_data(display_, this);
     lv_display_set_flush_cb(display_, flush_cb);
-    lv_display_set_buffers(display_, lv_buffer_.data(), nullptr,
-                           static_cast<std::uint32_t>(sizeof(lv_buffer_)),
+    lv_display_set_flush_wait_cb(display_, flush_wait_cb);
+    lv_display_set_buffers(display_, lv_buffer_a_.data(), lv_buffer_b_.data(),
+                           static_cast<std::uint32_t>(sizeof(lv_buffer_a_)),
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     indev_ = lv_indev_create();
@@ -173,6 +174,10 @@ esp_err_t DisplayUi::init_lvgl() {
     lv_indev_set_display(indev_, display_);
     lv_indev_set_user_data(indev_, this);
     lv_indev_set_read_cb(indev_, touch_read_cb);
+    // Staerkere Bremsung nach einem Wisch: der Schwung laeuft nicht mehr
+    // sekundenlang weiter, wenn die Anzeige nur wenige Bilder pro Sekunde
+    // schafft. 10 % waere der LVGL-Standard.
+    lv_indev_set_scroll_throw(indev_, 30);
 
     return ESP_OK;
 }
@@ -1068,21 +1073,29 @@ void DisplayUi::rebuild_raw() {
 void DisplayUi::flush_cb(lv_display_t* display, const lv_area_t* area,
                          std::uint8_t* px_map) {
     auto* self = static_cast<DisplayUi*>(lv_display_get_user_data(display));
-    if (self != nullptr) {
-        self->flush(area, px_map);
+    const bool queued = self != nullptr && self->flush(area, px_map);
+    if (!queued) {
+        // Kein DMA-Transfer gestartet: LVGL darf sofort weiterzeichnen.
+        lv_display_flush_ready(display);
     }
-    lv_display_flush_ready(display);
 }
 
-void DisplayUi::flush(const lv_area_t* area, std::uint8_t* px_map) {
+void DisplayUi::flush_wait_cb(lv_display_t* display) {
+    auto* self = static_cast<DisplayUi*>(lv_display_get_user_data(display));
+    if (self != nullptr) {
+        self->panel_.wait_draw();
+    }
+}
+
+bool DisplayUi::flush(const lv_area_t* area, std::uint8_t* px_map) {
     if (area == nullptr || px_map == nullptr) {
-        return;
+        return false;
     }
     const int width = static_cast<int>(lv_area_get_width(area));
     const int height = static_cast<int>(lv_area_get_height(area));
     if (width <= 0 || height <= 0 ||
         width * height > kFlushWidth * kFlushHeight) {
-        return;
+        return false;
     }
 
     const auto* source = reinterpret_cast<const std::uint16_t*>(px_map);
@@ -1097,7 +1110,7 @@ void DisplayUi::flush(const lv_area_t* area, std::uint8_t* px_map) {
             static_cast<std::uint8_t>(((color & 0x001F) << 3) | ((color & 0x0010) >> 2));
     }
 
-    panel_.draw_rgb666(area->x1, area->y1, width, height, target);
+    return panel_.draw_rgb666_async(area->x1, area->y1, width, height, target) == ESP_OK;
 }
 
 void DisplayUi::touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
