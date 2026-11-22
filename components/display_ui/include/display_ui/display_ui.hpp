@@ -201,6 +201,21 @@ private:
     std::uint32_t tone_freq_hz_{1000};
     double cal_reference_m_{10.0};
 
+    // Cache, damit die Tool-Seite nicht bei jedem 250-ms-Statuspoll neu
+    // gezeichnet wird (sonst sichtbares Flimmern/Tearen).
+    struct ToolUiState {
+        int active_line{-1};
+        std::uint32_t active_freq{0};
+        std::size_t selected_line{0};
+        std::uint32_t ui_freq{0};
+        bool busy{false};
+        bool paired{false};
+        double cal_ref{0.0};
+        std::array<double, cable_test::kLineCount> scale{};
+        bool valid{false};
+    };
+    ToolUiState last_tool_ui_{};
+
     struct TabButton {
         DisplayUi* self{nullptr};
         int page{0};

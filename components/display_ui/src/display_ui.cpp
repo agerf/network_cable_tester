@@ -1237,6 +1237,29 @@ void DisplayUi::update_tools() {
         }
     }
 
+    const bool paired = link_.paired();
+    const auto scale = length_cal::scale();
+
+    ToolUiState state;
+    state.active_line = active;
+    state.active_freq = active_freq;
+    state.selected_line = tone_selected_line_;
+    state.ui_freq = tone_freq_hz_;
+    state.busy = busy;
+    state.paired = paired;
+    state.cal_ref = cal_reference_m_;
+    state.scale = scale;
+    state.valid = true;
+    if (last_tool_ui_.valid && last_tool_ui_.active_line == state.active_line &&
+        last_tool_ui_.active_freq == state.active_freq &&
+        last_tool_ui_.selected_line == state.selected_line &&
+        last_tool_ui_.ui_freq == state.ui_freq && last_tool_ui_.busy == state.busy &&
+        last_tool_ui_.paired == state.paired && last_tool_ui_.cal_ref == state.cal_ref &&
+        last_tool_ui_.scale == state.scale) {
+        return;
+    }
+    last_tool_ui_ = state;
+
     for (std::size_t line = 0; line < cable_test::kLineCount; ++line) {
         ToneButton& tb = tone_buttons_[line];
         if (tb.button == nullptr || tb.label == nullptr) {
@@ -1284,7 +1307,7 @@ void DisplayUi::update_tools() {
     lv_label_set_text(tone_status_, text);
 
     if (length_cal_btn_ != nullptr) {
-        const bool disable = busy || !link_.paired();
+        const bool disable = busy || !paired;
         if (disable) {
             lv_obj_add_state(length_cal_btn_, LV_STATE_DISABLED);
         } else {
@@ -1305,7 +1328,6 @@ void DisplayUi::update_tools() {
     }
 
     if (cal_scale_label_ != nullptr) {
-        const auto scale = length_cal::scale();
         double min_scale = scale[0];
         double max_scale = scale[0];
         for (const double value : scale) {
