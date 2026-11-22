@@ -55,6 +55,18 @@ constexpr int kCalTargetY[4] = {80, 80, 400, 400};
 constexpr const char* kCalTargetName[4] = {"oben links", "oben rechts", "unten links",
                                            "unten rechts"};
 
+#if LV_FONT_MONTSERRAT_20
+const lv_font_t* const kFont20 = &lv_font_montserrat_20;
+#else
+const lv_font_t* const kFont20 = &lv_font_montserrat_14;
+#endif
+
+#if LV_FONT_MONTSERRAT_28
+const lv_font_t* const kFont28 = &lv_font_montserrat_28;
+#else
+const lv_font_t* const kFont28 = &lv_font_montserrat_14;
+#endif
+
 std::uint32_t now_ms() {
     return static_cast<std::uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
@@ -251,7 +263,7 @@ lv_obj_t* DisplayUi::make_label(lv_obj_t* parent, const char* text, const lv_fon
 lv_obj_t* DisplayUi::make_card_title(lv_obj_t* parent, const char* text) {
     lv_obj_t* label = lv_label_create(parent);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(label, kFont20, 0);
     lv_obj_set_style_text_color(label, kInk2, 0);
     return label;
 }
@@ -320,7 +332,7 @@ void DisplayUi::build_ui() {
 
     lv_obj_t* title = lv_label_create(brand_text);
     lv_label_set_text(title, "Kabeltester");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(title, kFont20, 0);
     lv_obj_set_style_text_color(title, kInk, 0);
 
     lv_obj_t* subtitle = lv_label_create(brand_text);
@@ -390,7 +402,7 @@ void DisplayUi::build_ui() {
     hero_card_ = make_card(scroll_);
     make_label(hero_card_, "KABELPRUEFUNG", &lv_font_montserrat_14, kMuted);
     make_label(hero_card_, "Beide Enden einstecken, dann testen.",
-               &lv_font_montserrat_20, kInk);
+               kFont20, kInk);
     make_label(hero_card_,
                "Der Slave misst am gegenueberliegenden Ende. Der Test dauert nur wenige "
                "Sekunden.",
@@ -411,7 +423,7 @@ void DisplayUi::build_ui() {
 
     test_btn_label_ = lv_label_create(test_btn_);
     lv_label_set_text(test_btn_label_, "Kabel testen");
-    lv_obj_set_style_text_font(test_btn_label_, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(test_btn_label_, kFont20, 0);
     lv_obj_set_style_text_color(test_btn_label_, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_opa(test_btn_label_, LV_OPA_60, LV_STATE_DISABLED);
     lv_obj_center(test_btn_label_);
@@ -463,7 +475,7 @@ void DisplayUi::build_ui() {
 
     verdict_icon_label_ = lv_label_create(verdict_icon);
     lv_label_set_text(verdict_icon_label_, "OK");
-    lv_obj_set_style_text_font(verdict_icon_label_, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(verdict_icon_label_, kFont20, 0);
     lv_obj_set_style_text_color(verdict_icon_label_, kGood, 0);
     lv_obj_center(verdict_icon_label_);
 
@@ -486,7 +498,7 @@ void DisplayUi::build_ui() {
     lv_label_set_text(verdict_kind_, "-");
     lv_label_set_long_mode(verdict_kind_, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(verdict_kind_, LV_PCT(100));
-    lv_obj_set_style_text_font(verdict_kind_, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(verdict_kind_, kFont28, 0);
     lv_obj_set_style_text_color(verdict_kind_, kInk, 0);
 
     verdict_detail_ = lv_label_create(verdict_text);
@@ -772,7 +784,7 @@ void DisplayUi::rebuild_wiring() {
 
                 lv_obj_t* open_mark = lv_label_create(wiring_area_);
                 lv_label_set_text(open_mark, "X");
-                lv_obj_set_style_text_font(open_mark, &lv_font_montserrat_20, 0);
+                lv_obj_set_style_text_font(open_mark, kFont20, 0);
                 lv_obj_set_style_text_color(open_mark, kCritical, 0);
                 lv_obj_set_pos(open_mark, kWireLeft + 68, y1 - 12);
             }
@@ -1184,7 +1196,7 @@ void DisplayUi::show_calibration_target(int index) {
     lv_label_set_text(title, "Touch-Kalibrierung");
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(title, kFont20, 0);
     lv_obj_set_style_text_color(title, kInk, 0);
     lv_obj_set_pos(title, 0, 5);
 
@@ -1207,7 +1219,7 @@ void DisplayUi::show_calibration_target(int index) {
 
     lv_obj_t* cross = lv_label_create(target);
     lv_label_set_text(cross, "+");
-    lv_obj_set_style_text_font(cross, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(cross, kFont28, 0);
     lv_obj_set_style_text_color(cross, kAccent, 0);
     lv_obj_center(cross);
 

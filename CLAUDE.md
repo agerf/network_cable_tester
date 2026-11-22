@@ -120,7 +120,8 @@ warning-free.
   git-ignored, `dependencies.lock` is tracked. Sources are guarded by
   `CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3`; the
   component is registered unconditionally because component CMake runs before
-  sdkconfig is loaded. LVGL uses CLIB malloc, RGB565 and Montserrat 14/20/28;
+  sdkconfig is loaded. LVGL uses CLIB malloc, RGB565 and Montserrat 14/20/28 (with a
+  compile-time fallback to 14 if 20/28 are disabled);
   UI strings are ASCII because the built-in fonts lack German umlauts.
 - `main/` — role-specific app entry (only `app_master.cpp` or `app_slave.cpp` is
   selected in `main/CMakeLists.txt`), WiFi APSTA/STA setup and runtime AP
@@ -182,6 +183,7 @@ warning-free.
   `menuconfig`, then rebuild.
 - **Display UI strings** are ASCII because the built-in Montserrat fonts lack
   German umlauts. Use e.g. "Laengen"/"Kurzschluesse" or add a Latin-1 font.
+  Montserrat 20/28 are optional; the code falls back to 14 if they are off.
 - **Touch calibration** is stored in NVS namespace `touch_cal`; the console
   command `touchcal` plus `reboot` reruns the four-point calibration screen.
   `T_IRQ` is only a fast hint; X/Y are read from the XPT2046 over SPI2.

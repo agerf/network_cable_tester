@@ -458,6 +458,12 @@ fest. Für die Master-Rolle sind die LVGL-Optionen in
 `sdkconfig.master` werden neue Kconfig-Werte nicht automatisch übernommen —
 dann `sdkconfig.master` löschen (oder `menuconfig`) und neu bauen.
 
+Die UI nutzt Montserrat 20/28 für Überschriften; sind diese Fonts im
+vorhandenen sdkconfig nicht aktiviert, fällt sie automatisch auf Montserrat 14
+zurück und baut trotzdem. Für die vorgesehene Darstellung
+`CONFIG_LV_FONT_MONTSERRAT_20=y` und `CONFIG_LV_FONT_MONTSERRAT_28=y` setzen
+(menuconfig oder `sdkconfig.master` löschen und neu bauen).
+
 ### WLAN-Zugangsdaten ändern
 
 Die Defaults stehen in `main/app_config.hpp` (`CableTester`/`cabletest123`).
