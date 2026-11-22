@@ -9,6 +9,7 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "rj45_port/pin_map.hpp"
@@ -340,6 +341,27 @@ bool Ili9488::read_touch(std::uint16_t& raw_x, std::uint16_t& raw_y, int& pressu
     z2_sum += read_touch_adc(0xC1);
     const std::uint16_t z1 = static_cast<std::uint16_t>(z1_sum / 2);
     const std::uint16_t z2 = static_cast<std::uint16_t>(z2_sum / 2);
+
+    static std::uint32_t last_warning_ms = 0;
+    const std::uint32_t now = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+    const auto warn_no_data = [&]() {
+        if (now - last_warning_ms >= 5000) {
+            last_warning_ms = now;
+            ESP_LOGW(kTag,
+                     "XPT2046 liefert keine Daten (z1=%u z2=%u); T_CS/T_CLK/T_DIN/T_DO "
+                     "und MISO (GPIO14) pruefen",
+                     z1, z2);
+        }
+    };
+
+    // 0/0 ist kein gueltiger ADC-Wert, sondern typisch fuer eine nicht
+    // antwortende oder nicht verdrahtete Touch-Leitung (MISO bleibt low).
+    if (z1 == 0 && z2 == 0) {
+        pressure = 0;
+        warn_no_data();
+        return false;
+    }
+
     pressure = static_cast<int>(z1) + 0xFFF - static_cast<int>(z2);
     if (pressure < kTouchThreshold && !irq_low) {
         return false;
@@ -347,6 +369,11 @@ bool Ili9488::read_touch(std::uint16_t& raw_x, std::uint16_t& raw_y, int& pressu
 
     raw_x = read_touch_adc(0xD1);
     raw_y = read_touch_adc(0x91);
+    if (raw_x == 0 && raw_y == 0) {
+        pressure = 0;
+        warn_no_data();
+        return false;
+    }
     return true;
 }
 
