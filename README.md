@@ -97,7 +97,7 @@ Master“ unter Bedienung).
 | 6 | SDI (MOSI) | GPIO 13 | SPI2 MOSI |
 | 7 | SCK | GPIO 12 | SPI2 SCLK |
 | 8 | LED | Q1 → 3V3 | Backlight, Gate an GPIO 18 (Ein/Aus, PWM möglich); optional R_DIM |
-| 9 | SDO (MISO) | GPIO 14 | optional, nur zum Lesen |
+| 9 | SDO (MISO) | GPIO 14 | optional, nur zum Lesen; bei Touch-Problemen offen lassen |
 | 10 | T_CLK | GPIO 12 | Touch teilt SCK |
 | 11 | T_CS | GPIO 21 | Touch-Chip-Select |
 | 12 | T_DIN | GPIO 13 | Touch teilt MOSI |
@@ -120,8 +120,10 @@ werden nicht unterstützt.
 - **Gemeinsamer Bus:** GPIO 12/13/14 werden von Display und Touch genutzt,
   nur CS ist getrennt (GPIO 15 bzw. 21). SDO (Display) und T_DO (Touch) dürfen
   beide auf GPIO 14 liegen, weil immer nur ein Chip selektiert ist. Für den
-  Touch ist **T_DO zwingend**; SDO wird nur benötigt, wenn das Display
-  gelesen werden soll.
+  Touch ist **T_DO (Pin 13) zwingend**; SDO (Pin 9) wird nur benötigt, wenn das
+  Display gelesen werden soll. Bei einem Konflikt (Display-SDO treibt die
+  Leitung auch bei inaktivem CS) **Pin 9 offen lassen** — das Display
+  funktioniert ohne SDO.
 - **5-V-Betrieb:** VCC = 5 V nur, wenn das Modul einen eigenen 3,3-V-Regler
   und Level-Shifter hat und die Logikpins nachweislich 3,3 V führen. Der
   ESP32-S3 ist **nicht 5-V-tolerant**; 5 V an SDO, T_DO oder T_IRQ können
@@ -605,7 +607,7 @@ scripts/idf_role.sh slave build
 | Display zeigt Streifen/Artefakte | SPI-Takt in `ili9488.cpp` von 20 MHz auf 10 MHz reduzieren und Leitungen kurz halten. |
 | Touch trifft daneben oder startet nichts | Vier-Punkt-Kalibrierung erneut ausführen (Button „Touch kalibrieren“ oder seriell `touchcal` + `reboot`). T_CLK/T_CS/T_DIN/T_DO müssen wie im Schaltplan verdrahtet sein; `T_IRQ` ist optional. Die Rohwerte stehen im Log (`Touch raw x=…`). |
 | Touch-Kalibrierung hängt/keine Berührung erkannt | Prüfen, ob der XPT2046 überhaupt am SPI-Bus antwortet (T_CS/T_CLK/T_DIN/T_DO, 3,3 V). Nach ca. 10 s fällt die Firmware auf die Standardabbildung zurück; die Anzeige bleibt nutzbar. |
-| Log zeigt `raw x=0 y=0` bzw. `z1=0 z2=0` | Der XPT2046 liefert keine SPI-Daten. **T_CS (GPIO 21)** und **T_DO (GPIO 14)** prüfen; T_CLK muss an GPIO 12, T_DIN an GPIO 13. Die Modul-Pinreihenfolge kann abweichen — Beschriftung kontrollieren. Nur `T_IRQ` reicht nicht. |
+| Log zeigt `raw x=0 y=0` bzw. `z1=0 z2=0` | Der XPT2046 liefert keine SPI-Daten. **T_CS (GPIO 21)** und **T_DO (GPIO 14)** prüfen; **Pin 9 (Display-SDO) testweise von GPIO 14 abklemmen**, nur Pin 13 (T_DO) anschließen. T_CLK muss an GPIO 12, T_DIN an GPIO 13. Die Modul-Pinreihenfolge kann abweichen — Beschriftung kontrollieren. Nur `T_IRQ` reicht nicht. |
 | Build-Fehler `cjson`/`driver/gpio.h` | ESP-IDF 6.1.x verwenden (dieses Projekt nutzt `esp_driver_gpio` und kein cJSON) |
 
 ## Status
