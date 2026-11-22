@@ -59,6 +59,9 @@ private:
     spi_device_handle_t touch_dev_{nullptr};
     spi_transaction_t draw_transaction_{};
     bool draw_pending_{false};
+    std::uint16_t last_touch_x_{0};
+    std::uint16_t last_touch_y_{0};
+    bool last_touch_valid_{false};
     bool initialized_{false};
 };
 

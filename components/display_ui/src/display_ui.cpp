@@ -178,6 +178,13 @@ esp_err_t DisplayUi::init_lvgl() {
     // sekundenlang weiter, wenn die Anzeige nur wenige Bilder pro Sekunde
     // schafft. 10 % waere der LVGL-Standard.
     lv_indev_set_scroll_throw(indev_, 30);
+    // Standard waere LV_DEF_REFR_PERIOD (33 ms). Kuerzere Periode plus der
+    // manuelle Read nach jedem lv_timer_handler verarbeitet einen neuen Press
+    // schneller, insbesondere waehrend eines langen Scroll-Refreshs.
+    lv_timer_t* read_timer = lv_indev_get_read_timer(indev_);
+    if (read_timer != nullptr) {
+        lv_timer_set_period(read_timer, 16);
+    }
 
     return ESP_OK;
 }
@@ -202,6 +209,14 @@ void DisplayUi::task_loop() {
     std::uint32_t last_status = now_ms();
     for (;;) {
         lv_timer_handler();
+
+        // Ein waehrend des letzten Refreshs aufgesetzter Finger wird vom
+        // Indev-Timer erst im naechsten Durchlauf gelesen. Direkt nach dem
+        // Refresh verarbeiten, damit der neue Press den Scroll-Nachlauf
+        // sofort beendet und die neue Bewegung uebernimmt.
+        if (indev_ != nullptr) {
+            lv_indev_read(indev_);
+        }
 
         const std::uint32_t now = now_ms();
         if (now - last_status >= 250) {
@@ -1114,13 +1129,22 @@ bool DisplayUi::flush(const lv_area_t* area, std::uint8_t* px_map) {
 }
 
 void DisplayUi::touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
-    (void)indev;
     auto* self = static_cast<DisplayUi*>(lv_indev_get_user_data(indev));
-    if (self != nullptr) {
-        self->read_touch(data);
-    } else {
+    if (self == nullptr) {
         data->state = LV_INDEV_STATE_RELEASED;
+        return;
     }
+
+    self->read_touch(data);
+
+    // Verifikation: neuer Press, waehrend LVGL noch einen Scroll-Nachlauf
+    // offen hat. LVGL stoppt ihn anschliessend in indev_proc_press.
+    if (data->state == LV_INDEV_STATE_PRESSED &&
+        self->last_touch_state_ != LV_INDEV_STATE_PRESSED &&
+        lv_indev_get_scroll_obj(indev) != nullptr) {
+        ESP_LOGI(kTag, "Touch beendet Scroll-Nachlauf");
+    }
+    self->last_touch_state_ = data->state;
 }
 
 void DisplayUi::read_touch(lv_indev_data_t* data) {

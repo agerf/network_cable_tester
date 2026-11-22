@@ -400,24 +400,51 @@ bool Ili9488::read_touch(std::uint16_t& raw_x, std::uint16_t& raw_y, int& pressu
 
     // 0/0 ist kein gueltiger ADC-Wert, sondern typisch fuer eine nicht
     // antwortende oder nicht verdrahtete Touch-Leitung (MISO bleibt low).
+    // Waehrend einer laufenden Beruehrung kann der XPT2046 aber auch
+    // kurzzeitig 0 liefern, z. B. waehrend eines Display-DMA-Transfers.
+    // Dann die letzten gueltigen Koordinaten verwenden, statt faelschlich
+    // ein Loslassen zu melden: LVGL wuerde sonst einen Scroll-Nachlauf
+    // starten, obwohl der Finger noch auf dem Display ist.
+    const auto use_last_touch = [&]() {
+        raw_x = last_touch_x_;
+        raw_y = last_touch_y_;
+        pressure = kTouchThreshold;
+        return true;
+    };
+
     if (z1 == 0 && z2 == 0) {
+        if (irq_low && last_touch_valid_) {
+            return use_last_touch();
+        }
         pressure = 0;
+        last_touch_valid_ = false;
         warn_no_data();
         return false;
     }
 
     pressure = static_cast<int>(z1) + 0xFFF - static_cast<int>(z2);
     if (pressure < kTouchThreshold && !irq_low) {
+        last_touch_valid_ = false;
         return false;
     }
 
-    raw_x = read_touch_adc(0xD1);
-    raw_y = read_touch_adc(0x91);
-    if (raw_x == 0 && raw_y == 0) {
+    const std::uint16_t x = read_touch_adc(0xD1);
+    const std::uint16_t y = read_touch_adc(0x91);
+    if (x == 0 && y == 0) {
+        if (irq_low && last_touch_valid_) {
+            return use_last_touch();
+        }
         pressure = 0;
+        last_touch_valid_ = false;
         warn_no_data();
         return false;
     }
+
+    last_touch_x_ = x;
+    last_touch_y_ = y;
+    last_touch_valid_ = true;
+    raw_x = x;
+    raw_y = y;
     return true;
 }
 

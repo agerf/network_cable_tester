@@ -146,6 +146,7 @@ private:
     int last_rssi_{0};
 
     std::uint32_t last_touch_log_ms_{0};
+    lv_indev_state_t last_touch_state_{LV_INDEV_STATE_RELEASED};
 };
 
 } // namespace cable_tester
