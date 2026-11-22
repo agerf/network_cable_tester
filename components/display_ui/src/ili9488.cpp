@@ -22,7 +22,7 @@ constexpr char kTag[] = "ili9488";
 
 // 0x28 = MV (X/Y tauschen, Landscape) + BGR. Bei gespiegelter/verdrehter
 // Anzeige hier experimentieren: 0x20 = Landscape/RGB, 0xE8 = 180 Grad.
-constexpr std::uint8_t kMadctl[1] = {0x28};
+constexpr std::uint8_t kMadctl[1] = {0x48}; // Porträt, X gespiegelt, BGR
 constexpr std::uint8_t kColorMode18Bit[1] = {0x66};
 
 constexpr std::uint8_t kCmdSwReset = 0x01;
@@ -144,6 +144,18 @@ esp_err_t Ili9488::init() {
         return err;
     }
 
+    // T_IRQ als optionaler, schneller Beruehrungs-Hinweis. Der XPT2046
+    // zieht die Leitung im Beruehrungsfall nach LOW.
+    gpio_config_t irq_config{};
+    irq_config.pin_bit_mask = 1ULL << static_cast<int>(board::display::kTouchIrq);
+    irq_config.mode = GPIO_MODE_INPUT;
+    irq_config.pull_up_en = GPIO_PULLUP_ENABLE;
+    irq_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    irq_config.intr_type = GPIO_INTR_DISABLE;
+    if (gpio_config(&irq_config) != ESP_OK) {
+        ESP_LOGW(kTag, "Touch-IRQ-GPIO konnte nicht konfiguriert werden");
+    }
+
     // P-MOSFET-Backlight: HIGH = aus, LOW = an.
     gpio_set_level(board::display::kBacklight, 1);
     err = reset();
@@ -157,7 +169,7 @@ esp_err_t Ili9488::init() {
     bus_config.sclk_io_num = board::display::kSpiSclk;
     bus_config.quadwp_io_num = -1;
     bus_config.quadhd_io_num = -1;
-    bus_config.max_transfer_sz = static_cast<int>(kLineBytes);
+    bus_config.max_transfer_sz = static_cast<int>(kMaxTransferBytes);
 
     err = spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -175,6 +187,22 @@ esp_err_t Ili9488::init() {
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "spi_bus_add_device: %s", esp_err_to_name(err));
         return err;
+    }
+
+    // XPT2046 als zweites Gerät am selben SPI2-Bus. Der SPI-Treiber
+    // verwaltet T_CS; der Touch wird über Druck (Z1/Z2) und X/Y gelesen.
+    spi_device_interface_config_t touch_config{};
+    touch_config.clock_speed_hz = 2 * 1000 * 1000;
+    touch_config.mode = 0;
+    touch_config.spics_io_num = board::display::kTouchCs;
+    touch_config.queue_size = 1;
+    err = spi_bus_add_device(SPI2_HOST, &touch_config, &touch_dev_);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Touch-SPI-Device: %s", esp_err_to_name(err));
+        touch_dev_ = nullptr;
+    } else {
+        // Erste Konvertierung nach dem Power-Up ist verrauscht.
+        (void)read_touch_adc(0xD1);
     }
 
     err = cmd(kCmdSwReset);
@@ -275,6 +303,51 @@ void Ili9488::fill_rect(int x, int y, int w, int h, std::uint16_t rgb565) {
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "fill_rect: %s", esp_err_to_name(err));
     }
+}
+
+std::uint16_t Ili9488::read_touch_adc(std::uint8_t command) {
+    if (touch_dev_ == nullptr) {
+        return 0;
+    }
+
+    std::uint8_t tx[3] = {command, 0, 0};
+    std::uint8_t rx[3] = {0, 0, 0};
+    spi_transaction_t transaction{};
+    transaction.length = 24;
+    transaction.tx_buffer = tx;
+    transaction.rx_buffer = rx;
+    if (spi_device_polling_transmit(touch_dev_, &transaction) != ESP_OK) {
+        return 0;
+    }
+    return static_cast<std::uint16_t>((rx[1] << 5) | (rx[2] >> 3));
+}
+
+bool Ili9488::read_touch(std::uint16_t& raw_x, std::uint16_t& raw_y, int& pressure) {
+    if (touch_dev_ == nullptr) {
+        return false;
+    }
+
+    // Vor den SPI-Zugriffen abtasten: T_IRQ kann sich waehrend der
+    // Konvertierungen aendern, ist aber ein guter schneller Hinweis.
+    const bool irq_low = gpio_get_level(board::display::kTouchIrq) == 0;
+
+    // Z1/Z2 mit ADC an; zwei Samples mitteln.
+    std::uint32_t z1_sum = 0;
+    std::uint32_t z2_sum = 0;
+    z1_sum += read_touch_adc(0xB1);
+    z2_sum += read_touch_adc(0xC1);
+    z1_sum += read_touch_adc(0xB1);
+    z2_sum += read_touch_adc(0xC1);
+    const std::uint16_t z1 = static_cast<std::uint16_t>(z1_sum / 2);
+    const std::uint16_t z2 = static_cast<std::uint16_t>(z2_sum / 2);
+    pressure = static_cast<int>(z1) + 0xFFF - static_cast<int>(z2);
+    if (pressure < kTouchThreshold && !irq_low) {
+        return false;
+    }
+
+    raw_x = read_touch_adc(0xD1);
+    raw_y = read_touch_adc(0x91);
+    return true;
 }
 
 void Ili9488::backlight(bool on) {

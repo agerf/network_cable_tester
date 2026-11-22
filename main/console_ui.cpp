@@ -21,6 +21,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_wifi_ap_get_sta_list.h"
+#include "nvs.h"
 #include "report/report.hpp"
 #include "test_runner/test_runner.hpp"
 #include "wifi.hpp"
@@ -199,6 +200,34 @@ int cmd_status_slave(int /*argc*/, char** /*argv*/) {
 }
 #endif
 
+#if CONFIG_CABLE_TESTER_ROLE_MASTER
+int cmd_touchcal(int /*argc*/, char** /*argv*/) {
+    nvs_handle_t handle{};
+    esp_err_t err = nvs_open("touch_cal", NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        std::printf("nvs_open(touch_cal): %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    err = nvs_erase_key(handle, "cal");
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        std::printf("Touch-Kalibrierung loeschen fehlgeschlagen (%s).\n",
+                    esp_err_to_name(err));
+        return 1;
+    }
+    std::printf("Touch-Kalibrierung geloescht. Mit 'reboot' neu starten; "
+                "das Display kalibriert danach neu.\n");
+    return 0;
+}
+
+#endif
+
 int cmd_reboot(int /*argc*/, char** /*argv*/) {
     std::printf("Neustart ...\n");
     std::fflush(stdout);
@@ -226,6 +255,12 @@ void register_commands() {
     wifi_cmd.help = "WLAN-SSID/Passwort anzeigen, setzen oder zuruecksetzen";
     wifi_cmd.func = &cmd_wifi;
     ESP_ERROR_CHECK(esp_console_cmd_register(&wifi_cmd));
+
+    esp_console_cmd_t touchcal_cmd{};
+    touchcal_cmd.command = "touchcal";
+    touchcal_cmd.help = "Touch-Kalibrierung loeschen (Neustart erforderlich)";
+    touchcal_cmd.func = &cmd_touchcal;
+    ESP_ERROR_CHECK(esp_console_cmd_register(&touchcal_cmd));
 #else
     esp_console_cmd_t status_cmd{};
     status_cmd.command = "status";

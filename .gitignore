@@ -73,3 +73,6 @@ sdkconfig.old
 sdkconfig.*.old
 sdkconfig.master
 sdkconfig.slave
+
+# ESP-IDF component manager
+managed_components/

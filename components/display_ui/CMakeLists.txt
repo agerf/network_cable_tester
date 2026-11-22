@@ -9,4 +9,7 @@ idf_component_register(
         report
         esp_driver_spi
         esp_driver_gpio
+        esp_timer
+        nvs_flash
+        lvgl__lvgl
 )

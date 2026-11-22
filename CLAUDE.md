@@ -108,13 +108,20 @@ warning-free.
   `EMBED_TXTFILES`) plus `/api/status` and `/api/test`. UI edits require a
   rebuild (the file is compiled into the firmware).
 - `components/display_ui/` — master-only ILI9488 SPI driver (SPI2, 20 MHz,
-  18-bit RGB666) plus an 8×8-font text UI. The display task polls
-  `TestRunner::last_result()`, shows summary, raw-data and 8×8-matrix pages
-  (auto page change every 6 s), and starts a test on the XPT2046 `T_IRQ`
-  (GPIO 47, no coordinate calibration). Sources are guarded by
+  18-bit RGB666, portrait 320×480) and a graphical LVGL 9.x UI styled after
+  the web UI. LVGL and the XPT2046 share SPI2; touch coordinates come from
+  XPT2046 X/Y readings (2 MHz) with `T_IRQ` as a fast hint. First boot runs a
+  four-point calibration stored in NVS namespace `touch_cal` (`touchcal`
+  console command resets it). The display task polls
+  `TestRunner::last_result()`, shows header/hero/result cards (verdict,
+  wiring, matrix, diagnosis, lengths, raw), and runs a test synchronously from
+  the "Kabel testen" button. LVGL is fetched via the component manager
+  (`components/display_ui/idf_component.yml`); `managed_components/` is
+  git-ignored, `dependencies.lock` is tracked. Sources are guarded by
   `CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3`; the
   component is registered unconditionally because component CMake runs before
-  sdkconfig is loaded.
+  sdkconfig is loaded. LVGL uses CLIB malloc, RGB565 and Montserrat 14/20/28;
+  UI strings are ASCII because the built-in fonts lack German umlauts.
 - `main/` — role-specific app entry (only `app_master.cpp` or `app_slave.cpp` is
   selected in `main/CMakeLists.txt`), WiFi APSTA/STA setup and runtime AP
   reconfiguration (`wifi.cpp`), UART REPL (`console_ui.cpp`), AP credential
@@ -159,13 +166,25 @@ warning-free.
 - Length calibration: `LengthConfig` in
   `components/rj45_port/include/rj45_port/rj45_port.hpp`.
 - Web UI: `components/web_ui/www/index.html` (embedded; rebuild after edits).
-- Display UI: `components/display_ui/src/display_ui.cpp` (pages, touch, status)
-  and `src/ili9488.cpp` (`kMadctl` orientation, SPI clock, init sequence,
-  backlight). Font: `src/font8x8.hpp` (public domain).
+- Display UI: `components/display_ui/src/display_ui.cpp` (LVGL layout,
+  touch calibration, NVS `touch_cal`) and `src/ili9488.cpp` (portrait
+  `kMadctl`, SPI clock, init sequence, XPT2046 reads, backlight). LVGL
+  settings: `sdkconfig.master.defaults`; dependency:
+  `components/display_ui/idf_component.yml`.
 - Role defaults: `sdkconfig.master.defaults`, `sdkconfig.slave.defaults`.
 
 ## Constraints and gotchas
 
+- **LVGL component manager**: the first master build fetches LVGL 9.x from the
+  ESP-IDF Component Registry (network required). `managed_components/` is
+  git-ignored; `dependencies.lock` is tracked. New LVGL Kconfig defaults do
+  not back-propagate into an existing `sdkconfig.master`; delete it or use
+  `menuconfig`, then rebuild.
+- **Display UI strings** are ASCII because the built-in Montserrat fonts lack
+  German umlauts. Use e.g. "Laengen"/"Kurzschluesse" or add a Latin-1 font.
+- **Touch calibration** is stored in NVS namespace `touch_cal`; the console
+  command `touchcal` plus `reboot` reruns the four-point calibration screen.
+  `T_IRQ` is only a fast hint; X/Y are read from the XPT2046 over SPI2.
 - **Common ground**: both boards must share a ground (e.g., both USB cables on
   the same host/hub). Without it, the slave reads all lines low and the report
   shows all-open. This cannot be fixed in firmware; UI and README contain hints.

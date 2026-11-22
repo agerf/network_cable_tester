@@ -5,19 +5,21 @@
 #if CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 #include "cable_link/master_link.hpp"
 #include "esp_err.h"
 #include "ili9488.hpp"
+#include "lvgl.h"
 #include "test_runner/test_runner.hpp"
 
 namespace cable_tester {
 
-// Einfache Display-Oberfläche für den Master. Zeigt Verbindungsstatus,
-// Testzusammenfassung und Rohdaten; eine Berührung startet einen neuen Test.
-// Die Seiten wechseln nach einem Ergebnis automatisch.
+// Grafische Master-Oberfläche auf dem ILI9488 (Porträt 320x480) mit LVGL.
+// Aufbau und Farben orientieren sich an der Web-UI. Touch läuft über den
+// XPT2046 am gemeinsamen SPI2-Bus; die Rohwerte werden auf 320x480 gemappt.
 class DisplayUi {
 public:
     DisplayUi(TestRunner& runner, MasterLink& link, const char* ap_ssid);
@@ -27,50 +29,119 @@ public:
     esp_err_t start();
 
 private:
-    static constexpr int kRows = 20;
-    static constexpr int kCols = 30;
-    static constexpr int kContentRows = 16;
-    static constexpr int kHeaderRows = 3;
-    static constexpr int kFooterRow = kRows - 1;
-    static constexpr int kPageCount = 3;
+    static constexpr int kFlushWidth = 320;
+    static constexpr int kFlushHeight = 24;
+    static constexpr int kLinePointSlots = 64;
+
+    // Kalibrierung des XPT2046; bei Bedarf nach den Debug-Logs anpassen.
+    static constexpr int kRawXMin = 200;
+    static constexpr int kRawXMax = 3900;
+    static constexpr int kRawYMin = 200;
+    static constexpr int kRawYMax = 3900;
+    static constexpr std::uint32_t kCalibrationMagic = 0x5443414C; // "TCAL"
 
     static void task_entry(void* arg);
     void task_loop();
 
-    void draw_header();
-    void draw_footer();
-    void draw_content();
-    void draw_text_row(int row, const char* text, std::uint16_t fg, std::uint16_t bg);
-    void draw_content_lines(const std::array<std::string, kContentRows>& lines, int count,
-                            std::uint16_t first_color);
-
-    bool touch_pressed();
-    void handle_touch();
+    esp_err_t init_lvgl();
+    void build_ui();
+    void update_status();
     void refresh_result();
-    void build_summary(std::array<std::string, kContentRows>& lines, int& count) const;
-    void build_raw(std::array<std::string, kContentRows>& lines, int& count) const;
-    void build_matrix(std::array<std::string, kContentRows>& lines, int& count) const;
-    static void wrap_text(const std::string& text,
-                          std::array<std::string, kContentRows>& lines, int& count);
+    void run_requested_test();
+    void apply_result(const TestResult& result);
+    void show_error(const char* message);
+    void hide_error();
+
+    void rebuild_wiring();
+    void rebuild_matrix();
+    void rebuild_diagnostics();
+    void rebuild_lengths();
+    void rebuild_raw();
+
+    lv_obj_t* make_card(lv_obj_t* parent);
+    lv_obj_t* make_label(lv_obj_t* parent, const char* text, const lv_font_t* font,
+                         lv_color_t color);
+    lv_obj_t* make_card_title(lv_obj_t* parent, const char* text);
+    void add_diag_row(lv_obj_t* parent, const char* icon, lv_color_t icon_color,
+                      const char* name, const char* value, lv_color_t value_color);
+
+    static void flush_cb(lv_display_t* display, const lv_area_t* area, std::uint8_t* px_map);
+    void flush(const lv_area_t* area, std::uint8_t* px_map);
+    static void touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
+    void read_touch(lv_indev_data_t* data);
+    static void test_button_cb(lv_event_t* event);
+    static void calibration_button_cb(lv_event_t* event);
+
+    bool load_calibration();
+    void save_calibration();
+    void apply_default_calibration();
+    bool run_calibration();
+    bool capture_calibration_point(int index, std::uint16_t& raw_x,
+                                   std::uint16_t& raw_y);
+    void show_calibration_target(int index);
+    int map_screen_x(int raw_x, int raw_y) const;
+    int map_screen_y(int raw_x, int raw_y) const;
+
+    static lv_color_t kind_color(cable_test::CableKind kind);
+    static const char* kind_icon(cable_test::CableKind kind);
 
     TestRunner& runner_;
     MasterLink& link_;
     const char* ap_ssid_;
     display::Ili9488 panel_;
-    std::array<std::uint8_t, display::Ili9488::kLineBytes> line_buffer_{};
 
+    lv_display_t* display_{nullptr};
+    lv_indev_t* indev_{nullptr};
+    std::array<std::uint16_t, kFlushWidth * kFlushHeight> lv_buffer_{};
+    std::array<std::uint8_t, kFlushWidth * kFlushHeight * 3> flush_buffer_{};
+
+    lv_obj_t* scroll_{nullptr};
+    lv_obj_t* hero_card_{nullptr};
+    lv_obj_t* status_chip_{nullptr};
+    lv_obj_t* status_dot_{nullptr};
+    lv_obj_t* status_label_{nullptr};
+    lv_obj_t* test_btn_{nullptr};
+    lv_obj_t* test_btn_label_{nullptr};
+    lv_obj_t* error_label_{nullptr};
+    lv_obj_t* result_container_{nullptr};
+    lv_obj_t* verdict_card_{nullptr};
+    lv_obj_t* verdict_bar_{nullptr};
+    lv_obj_t* verdict_icon_label_{nullptr};
+    lv_obj_t* verdict_kind_{nullptr};
+    lv_obj_t* verdict_detail_{nullptr};
+    lv_obj_t* wiring_area_{nullptr};
+    lv_obj_t* matrix_area_{nullptr};
+    lv_obj_t* diag_area_{nullptr};
+    lv_obj_t* length_area_{nullptr};
+    lv_obj_t* raw_label_{nullptr};
+
+    std::array<std::array<lv_point_precise_t, 2>, kLinePointSlots> line_points_{};
+
+    struct TouchCalibration {
+        std::uint32_t magic{0};
+        float a{0.0F};
+        float b{0.0F};
+        float c{0.0F};
+        float d{0.0F};
+        float e{0.0F};
+        float f{0.0F};
+    };
+
+    TouchCalibration calibration_{};
     TestResult result_{};
     std::uint32_t result_generation_{0};
     bool has_result_{false};
-    int page_{0};
-    std::uint32_t page_since_ms_{0};
     bool testing_{false};
-    bool error_{false};
-    char error_text_[64]{};
+    bool test_requested_{false};
+    bool calibration_requested_{false};
 
-    bool touch_latched_{false};
-    int touch_hold_{0};
+    bool last_paired_{false};
     bool last_busy_{false};
+    bool last_button_disabled_{false};
+    bool status_dirty_{true};
+    int last_rssi_{0};
+
+    std::uint32_t last_touch_log_ms_{0};
 };
 
 } // namespace cable_tester

@@ -39,9 +39,10 @@ vom Master getriebenen Pegel nicht sehen und meldet alle Adern als offen.
   benutzerdefinierte Belegung, fehlerhaft
 - Experimentelle Längenmessung pro Paar (Kapazitätsverfahren)
 - Web-UI im WLAN mit Verdrahtungsgrafik, Matrix, Diagnose und Rohdaten
-- Display am Master: Status, Testzusammenfassung, Rohdaten und 8×8-Matrix;
-  Touch startet einen Test
-- Serielle Konsole mit `test`, `status`, `wifi`, `reboot`, `help`
+- Grafisches Display am Master (LVGL, Porträt 320×480): Status, Testkarten
+  für Verdrahtung, Matrix, Diagnose und Längen; Touch-Bedienung mit
+  Vier-Punkt-Kalibrierung
+- Serielle Konsole mit `test`, `status`, `wifi`, `touchcal`, `reboot`, `help`
 - Automatisches Wieder-Pairing (Slave sendet alle 3 s ein HELLO)
 
 ## Pin-Mapping
@@ -83,7 +84,8 @@ Eingang), 1 und 3 (UART0) vermeiden.
 Ein ILI9488-Modul (3,5 Zoll, 480×320, 14-polig) hängt ausschließlich am
 Master; der Slave bleibt unverändert. Display und XPT2046-Touch teilen sich
 SPI2 (HSPI). Die GPIOs sind in `pin_map.hpp` reserviert; die Anzeige-Firmware
-ist implementiert (siehe „Display am Master“ unter Bedienung).
+ist implementiert: eine LVGL-Oberfläche im Porträtmodus (siehe „Display am
+Master“ unter Bedienung).
 
 | Modul-Pin | Signal | ESP32-S3 | Funktion |
 | --- | --- | --- | --- |
@@ -100,7 +102,7 @@ ist implementiert (siehe „Display am Master“ unter Bedienung).
 | 11 | T_CS | GPIO 21 | Touch-Chip-Select |
 | 12 | T_DIN | GPIO 13 | Touch teilt MOSI |
 | 13 | T_DO | GPIO 14 | Touch-Datenausgang |
-| 14 | T_IRQ | GPIO 47 | Touch-IRQ; ohne T_IRQ kein Touch |
+| 14 | T_IRQ | GPIO 47 | Touch-IRQ (optionaler Hinweis) |
 
 Die Tabelle folgt der verbreiteten 14-poligen Modulbelegung; die
 Beschriftung auf der eigenen Platine ist maßgeblich. Kapazitive
@@ -109,13 +111,12 @@ werden nicht unterstützt.
 
 - **SPI:** Mode 0, Start mit 20 MHz und kurzen Leitungen; viele Module
   laufen auch mit 27–40 MHz, das liegt aber außerhalb der
-  ILI9488-Spezifikation.
-- **Touch-Anbindung:** Die aktuelle Firmware hält `T_CS` (GPIO 21) hoch,
-  liest den XPT2046 nicht über SPI und wertet nur den IRQ `T_IRQ` an GPIO 47
-  aus (keine Koordinaten). Der XPT2046 selbst ist für maximal 2 MHz (Mode 0)
-  spezifiziert; falls er später über den gemeinsamen SPI-Bus gelesen wird,
-  muss der Takt pro SPI-Device auf 1–2 MHz stehen, während das Display mit
-  20 MHz läuft.
+  ILI9488-Spezifikation. Der XPT2046 wird mit 2 MHz am selben Bus gelesen.
+- **Touch-Anbindung:** Display und XPT2046 hängen am gemeinsamen SPI2-Bus;
+  `T_CS` (GPIO 21) verwaltet der SPI-Treiber, die Koordinaten kommen über
+  X/Y-Konvertierungen (max. 2 MHz, Mode 0). `T_IRQ` (GPIO 47) dient als
+  schneller Berührungs-Hinweis, ist aber nicht zwingend. Beim ersten Start
+  kalibriert die Firmware die vier Eckpunkte und speichert die Werte im NVS.
 - **Gemeinsamer Bus:** GPIO 12/13/14 werden von Display und Touch genutzt,
   nur CS ist getrennt (GPIO 15 bzw. 21). SDO und T_DO dürfen beide auf
   GPIO 14 liegen, weil immer nur ein Chip selektiert ist.
@@ -141,9 +142,8 @@ werden nicht unterstützt.
   GPIO 18 bleibt frei.
 - **Entkopplung:** 100 nF und 10 µF modulnah zwischen VCC und GND.
 - **GPIO 47:** Nicht auf jedem Dev-Board herausgeführt. Dann T_IRQ offen
-  lassen; Touch entfällt, Anzeige, Web-UI und Konsole funktionieren weiter.
-  Alternativ `display::kTouchIrq` in `pin_map.hpp` auf einen freien GPIO
-  legen.
+  lassen; der Touch funktioniert weiter über die Druckmessung. Alternativ
+  `display::kTouchIrq` in `pin_map.hpp` auf einen freien GPIO legen.
 - **MicroSD-Slot:** bleibt ungenutzt; dessen CS nicht anschließen.
 
 Die Konstanten stehen in `pin_map.hpp` im Namensraum `display`; ein
@@ -318,6 +318,12 @@ scripts/idf_role.sh master build
 scripts/idf_role.sh slave build
 ```
 
+Der erste Master-Build lädt **LVGL 9.x** über den ESP-IDF Component Manager
+(Internetverbindung nötig). `managed_components/` ist git-ignoriert, die
+Version steht in `dependencies.lock`. Bei einem vorhandenen
+`sdkconfig.master` die neuen LVGL-Optionen ggf. per `menuconfig` übernehmen
+oder die Datei löschen und neu bauen.
+
 Falls ein bestehendes Build-Verzeichnis noch auf ein anderes Target zeigt
 (`build-slave/` war früher auf `esp32` konfiguriert):
 
@@ -388,14 +394,16 @@ Auf diesem Rechner liegt VS Code unter
 
 1. Beide Tester mit gemeinsamer Masse mit Strom versorgen.
 2. Das zu prüfende Kabel zwischen die beiden RJ45-Buchsen stecken.
-3. Am Master startet eine Berührung des Displays den Test, sobald der Slave
-   verbunden ist. Das Ergebnis erscheint auf dem Display; die Seiten wechseln
-   automatisch zwischen Zusammenfassung, Rohdaten und Matrix.
+3. Beim ersten Start am Display die vier Kreuze antippen (Touch-Kalibrierung).
+   Danach im Display auf **Kabel testen** tippen; die Ergebniskarten
+   (Verdrahtung, Matrix, Diagnose, Längen, Rohdaten) erscheinen und lassen
+   sich scrollen.
 4. Alternativ mit dem WLAN **`CableTester`** verbinden (Passwort
    **`cabletest123`**), <http://192.168.4.1/> öffnen, oben muss „Slave
    verbunden“ stehen; dann **Kabel testen** drücken.
 5. Oder seriell mit 115200 8N1: `test` startet einen Test, `status` zeigt den
-   Link, `wifi` zeigt/ändert SSID/Passwort, `reboot` startet das Board neu,
+   Link, `wifi` zeigt/ändert SSID/Passwort, `touchcal` löscht die
+   Touch-Kalibrierung (danach `reboot`), `reboot` startet das Board neu,
    `help` listet die Kommandos.
 
 Auf dem ESP32-S3 läuft die serielle Konsole standardmäßig über **UART0**
@@ -404,38 +412,51 @@ Auf dem ESP32-S3 läuft die serielle Konsole standardmäßig über **UART0**
 `sdkconfig.master` eintragen) und neu bauen; die Firmware unterstützt beide
 Konsolentypen. Die Web-UI funktioniert unabhängig davon.
 
-### Display am Master
+### Display am Master (LVGL)
 
-Das ILI9488 wird beim Boot automatisch initialisiert. Angezeigt werden:
+Das ILI9488 (Porträt 320×480) wird beim Boot initialisiert und zeigt eine
+grafische Oberfläche mit LVGL, angelehnt an die Web-UI:
 
-- **Kopfzeile:** Firmware-Version, WLAN-SSID, Slave-Status und RSSI
-- **Zusammenfassung:** Kabeltyp, Verdrahtung, Kurzschlüsse, Unterbrechungen
-  und Längen (aus `report::format_text`)
-- **Rohdaten:** Idle-Masken, alle acht Messrunden (lokal/remote) und die
-  Längen je Ader
-- **Matrix:** 8×8-Matrix A→B (X = HIGH am Slave) plus lokale Masken; nach
-  einem Ergebnis wechseln die drei Seiten alle 6 s
-- **Fußzeile:** Touch-Hinweis und Seitenzahl
+- **Kopfzeile:** „Kabeltester“, Node/SSID, Status-Chip (verbunden/getrennt/
+  Test läuft), RSSI und AP-IP
+- **Hero-Karte:** Hinweis zum Testen und großer Button **„Kabel testen“**
+- **Ergebniskarten:** Verdrahtungsgrafik A→B, Messmatrix, Diagnose, Längen
+  (experimentell) und Rohdaten – mit denselben Farben wie die Web-UI
+  (grün = gut, gelb = Warnung, rot = Fehler)
+- **Touch-Bedienung:** Buttons und Scrollen; die Koordinaten werden über den
+  XPT2046 gelesen
 
-**Touch:** Es wird nur der XPT2046-`T_IRQ` an GPIO 47 ausgewertet (keine
-Koordinatenkalibrierung). Eine Berührung startet einen neuen Test, wenn der
-Slave verbunden und kein Test aktiv ist. Ist `T_IRQ` nicht verdrahtet, bleibt
-die Anzeige inklusive automatischem Seitenwechsel nutzbar; Tests lassen sich
-über Web-UI oder Konsole starten und werden trotzdem angezeigt.
+**Erste Inbetriebnahme / Kalibrierung:** Beim ersten Start (oder nach
+`touchcal`) erscheinen vier Kreuze. Jedes Kreuz antippen und wieder loslassen;
+die Firmware berechnet daraus eine affine Touch-Abbildung und speichert sie im
+NVS (`touch_cal`). Wird innerhalb von ca. 10 s kein Touch erkannt, verwendet
+die Firmware eine Standardabbildung und zeigt trotzdem die UI. Die Rohwerte
+stehen im Log (`Touch raw x=… y=… z=…`); damit lässt sich die Verkabelung
+prüfen.
+
+**Touch neu kalibrieren:** Seriell `touchcal` am Master, danach `reboot`.
+Alternativ den Button **„Touch kalibrieren“** am Ende der Display-Seite nutzen.
 
 **Anpassen** (`components/display_ui/src/ili9488.cpp`):
 
-- Bild gedreht/gespiegelt: `kMadctl` ändern — `0x28` = Landscape/BGR,
-  `0x20` = Landscape/RGB, `0x68` = Landscape/BGR/X gespiegelt,
-  `0xE8` = 180°.
-- Farben vertauscht: BGR-Bit entfernen (`0x20` statt `0x28`).
+- Bild gedreht/gespiegelt: `kMadctl` ändern — `0x48` = Porträt/BGR/X
+  gespiegelt (aktuell), `0x08` = Porträt/BGR, `0x88` = Porträt/BGR/Y
+  gespiegelt, `0xC8` = Porträt/BGR 180°.
+- Farben vertauscht: BGR-Bit entfernen (z. B. `0x40` statt `0x48`).
 - Bild invertiert: `cmd(0x21)` (INVON) in `Ili9488::init()` ergänzen.
 - Streifen/Artefakte: `clock_speed_hz` in `Ili9488::init()` von 20 MHz auf
   z. B. 10 MHz reduzieren.
 
 Ohne angeschlossenes Display startet die Firmware normal weiter (die Anzeige
-bleibt leer); Web-UI und Konsole bleiben unverändert. Schlägt die
-SPI-Initialisierung fehl, steht ein Warnhinweis im Log.
+bleibt leer); Web-UI und Konsole bleiben unverändert.
+
+**LVGL/Abhängigkeiten:** Die LVGL-Komponente wird beim ersten Build über den
+ESP-IDF Component Manager geladen (`components/display_ui/idf_component.yml`).
+`managed_components/` ist git-ignoriert, `dependencies.lock` hält die Version
+fest. Für die Master-Rolle sind die LVGL-Optionen in
+`sdkconfig.master.defaults` hinterlegt. Bei einem bereits vorhandenen
+`sdkconfig.master` werden neue Kconfig-Werte nicht automatisch übernommen —
+dann `sdkconfig.master` löschen (oder `menuconfig`) und neu bauen.
 
 ### WLAN-Zugangsdaten ändern
 
@@ -449,6 +470,9 @@ wifi ssid "Werkstatt"   SSID setzen (1-32 Zeichen, Leerzeichen in "...")
 wifi pass "geheim123"   Passwort setzen (8-63 druckbare Zeichen)
 wifi reset              Defaults wiederherstellen
 ```
+
+`touchcal` löscht die gespeicherte Touch-Kalibrierung; nach `reboot` erscheint
+beim nächsten Start wieder die Vier-Punkt-Kalibrierung auf dem Display.
 
 `wifi` ohne Argument entspricht `wifi status` und zeigt zusätzlich die
 AP-IPv4-Adresse samt Netzmaske/Gateway, den Kanal, die AP-/STA-MAC sowie alle
@@ -523,7 +547,7 @@ components/
   test_runner/   Ablaufsteuerung der Messung
   report/        JSON- und Text-Report
   web_ui/        HTTP-Server + eingebettete Single-Page-UI
-  display_ui/    ILI9488-SPI-Treiber + Display-Oberfläche (nur Master)
+  display_ui/    LVGL-Oberfläche + ILI9488/XPT2046-Treiber (nur Master)
 main/            Rollenwahl, WLAN-AP/STA, Konsole, app_main
 host_tests/      Host-Tests für die Analyse
 scripts/         idf_role.sh (Build/Flash pro Rolle)
@@ -569,15 +593,17 @@ scripts/idf_role.sh slave build
 | S3: keine Logs/Konsole über den nativen USB-Port | Die Konsole läuft per Default über UART0. Für USB Serial/JTAG `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` setzen und neu bauen; die Web-UI ist davon unabhängig. |
 | `phy_init: failed to load RF calibration data` | Normal beim ersten Boot nach dem Flashen (vollständige RF-Kalibrierung). Erst kritisch, wenn das Board dabei resetet oder der USB-Port verschwindet – dann Stromversorgung/Cable prüfen. |
 | Display bleibt dunkel/weiß | Backlight prüfen (Q1-Gate an GPIO 18, LOW = an; ohne Q1 LED direkt an 3V3), 3,3-V-Versorgung und SPI-Leitungen 12–17 kontrollieren. Im Log erscheint `ILI9488 initialisiert …` bzw. ein Fehler. |
-| Display-Bild gedreht, gespiegelt oder Farben vertauscht | `kMadctl` in `components/display_ui/src/ili9488.cpp` anpassen (`0x28` Landscape/BGR, `0x20` Landscape/RGB, `0x68` X gespiegelt, `0xE8` 180°). |
+| Display-Bild gedreht, gespiegelt oder Farben vertauscht | `kMadctl` in `components/display_ui/src/ili9488.cpp` anpassen (`0x48` Porträt/BGR/X gespiegelt, `0x08` Porträt/BGR, `0x88` Y gespiegelt, `0xC8` 180°). |
 | Display zeigt Streifen/Artefakte | SPI-Takt in `ili9488.cpp` von 20 MHz auf 10 MHz reduzieren und Leitungen kurz halten. |
-| Touch startet keinen Test | `T_IRQ` des Moduls muss an GPIO 47 liegen (interne Pull-ups aktiv). Ohne T_IRQ Anzeige/Seitenwechsel weiter nutzen und Tests über Web-UI/Konsole starten. |
+| Touch trifft daneben oder startet nichts | Vier-Punkt-Kalibrierung erneut ausführen (Button „Touch kalibrieren“ oder seriell `touchcal` + `reboot`). T_CLK/T_CS/T_DIN/T_DO müssen wie im Schaltplan verdrahtet sein; `T_IRQ` ist optional. Die Rohwerte stehen im Log (`Touch raw x=…`). |
+| Touch-Kalibrierung hängt/keine Berührung erkannt | Prüfen, ob der XPT2046 überhaupt am SPI-Bus antwortet (T_CS/T_CLK/T_DIN/T_DO, 3,3 V). Nach ca. 10 s fällt die Firmware auf die Standardabbildung zurück; die Anzeige bleibt nutzbar. |
 | Build-Fehler `cjson`/`driver/gpio.h` | ESP-IDF 6.1.x verwenden (dieses Projekt nutzt `esp_driver_gpio` und kein cJSON) |
 
 ## Status
 
 Build beider Rollen (Master und Slave, jeweils `esp32s3`) mit ESP-IDF 6.1.1 und
 die Host-Tests sind verifiziert. Die Inbetriebnahme auf echter Hardware (beide
-Boards, reales Kabel) steht noch aus. Display und Touch (ILI9488 + XPT2046)
-sind implementiert (Anzeige, Touch-Teststart, automatischer Seitenwechsel);
-die Inbetriebnahme auf echter Display-Hardware steht ebenfalls noch aus.
+Boards, reales Kabel) steht noch aus. Das Master-Display nutzt jetzt LVGL im
+Porträtmodus (320×480) mit einer Web-UI-ähnlichen Kartenoberfläche und
+Vier-Punkt-Touch-Kalibrierung; die Inbetriebnahme auf echter Display-Hardware
+steht ebenfalls noch aus.
