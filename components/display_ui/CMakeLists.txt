@@ -6,7 +6,6 @@ idf_component_register(
         cable_link
         rj45_port
         test_runner
-        report
         esp_driver_spi
         esp_driver_gpio
         esp_timer

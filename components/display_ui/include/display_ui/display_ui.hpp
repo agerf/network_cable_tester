@@ -40,11 +40,26 @@ private:
     static constexpr int kRawYMax = 3900;
     static constexpr std::uint32_t kCalibrationMagic = 0x5443414C; // "TCAL"
 
+    // Feste Display-Seiten statt eines Scroll-Containers.
+    static constexpr int kPageTest = 0;
+    static constexpr int kPageResult = 1;
+    static constexpr int kPageWiring = 2;
+    static constexpr int kPageMatrix = 3;
+    static constexpr int kPageCount = 4;
+
     static void task_entry(void* arg);
     void task_loop();
 
     esp_err_t init_lvgl();
     void build_ui();
+    void build_header(lv_obj_t* screen);
+    void build_nav(lv_obj_t* screen);
+    void build_test_page(lv_obj_t* page);
+    void build_result_page(lv_obj_t* page);
+    void build_wiring_page(lv_obj_t* page);
+    void build_matrix_page(lv_obj_t* page);
+    void show_page(int page);
+    void show_matrix_view(bool raw);
     void update_status();
     void refresh_result();
     void run_requested_test();
@@ -58,6 +73,7 @@ private:
     void rebuild_lengths();
     void rebuild_raw();
 
+    lv_obj_t* make_page(lv_obj_t* parent);
     lv_obj_t* make_card(lv_obj_t* parent);
     lv_obj_t* make_label(lv_obj_t* parent, const char* text, const lv_font_t* font,
                          lv_color_t color);
@@ -72,6 +88,8 @@ private:
     void read_touch(lv_indev_data_t* data);
     static void test_button_cb(lv_event_t* event);
     static void calibration_button_cb(lv_event_t* event);
+    static void tab_button_cb(lv_event_t* event);
+    static void view_toggle_cb(lv_event_t* event);
 
     bool load_calibration();
     void save_calibration();
@@ -99,7 +117,9 @@ private:
     alignas(4) std::array<std::uint16_t, kFlushWidth * kFlushHeight> lv_buffer_b_{};
     alignas(4) std::array<std::uint8_t, kFlushWidth * kFlushHeight * 3> flush_buffer_{};
 
-    lv_obj_t* scroll_{nullptr};
+    lv_obj_t* page_host_{nullptr};
+    lv_obj_t* nav_{nullptr};
+    std::array<lv_obj_t*, kPageCount> pages_{};
     lv_obj_t* hero_card_{nullptr};
     lv_obj_t* status_chip_{nullptr};
     lv_obj_t* status_dot_{nullptr};
@@ -107,17 +127,39 @@ private:
     lv_obj_t* test_btn_{nullptr};
     lv_obj_t* test_btn_label_{nullptr};
     lv_obj_t* error_label_{nullptr};
-    lv_obj_t* result_container_{nullptr};
+    lv_obj_t* cal_btn_{nullptr};
+    lv_obj_t* footer_label_{nullptr};
     lv_obj_t* verdict_card_{nullptr};
     lv_obj_t* verdict_bar_{nullptr};
     lv_obj_t* verdict_icon_label_{nullptr};
     lv_obj_t* verdict_kind_{nullptr};
     lv_obj_t* verdict_detail_{nullptr};
     lv_obj_t* wiring_area_{nullptr};
+    lv_obj_t* matrix_card_{nullptr};
     lv_obj_t* matrix_area_{nullptr};
+    lv_obj_t* raw_card_{nullptr};
+    lv_obj_t* raw_label_{nullptr};
     lv_obj_t* diag_area_{nullptr};
     lv_obj_t* length_area_{nullptr};
-    lv_obj_t* raw_label_{nullptr};
+
+    struct TabButton {
+        DisplayUi* self{nullptr};
+        int page{0};
+        lv_obj_t* button{nullptr};
+        lv_obj_t* label{nullptr};
+    };
+    struct ViewToggle {
+        DisplayUi* self{nullptr};
+        bool raw{false};
+        lv_obj_t* button{nullptr};
+        lv_obj_t* label{nullptr};
+    };
+
+    std::array<TabButton, kPageCount> tabs_{};
+    ViewToggle matrix_toggle_{};
+    ViewToggle raw_toggle_{};
+    int active_page_{kPageTest};
+    bool matrix_show_raw_{false};
 
     std::array<std::array<lv_point_precise_t, 2>, kLinePointSlots> line_points_{};
 
@@ -146,7 +188,6 @@ private:
     int last_rssi_{0};
 
     std::uint32_t last_touch_log_ms_{0};
-    lv_indev_state_t last_touch_state_{LV_INDEV_STATE_RELEASED};
 };
 
 } // namespace cable_tester

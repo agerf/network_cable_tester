@@ -21,7 +21,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
-#include "report/report.hpp"
 #include "rj45_port/pin_map.hpp"
 
 namespace cable_tester {
@@ -42,13 +41,12 @@ const lv_color_t kGood = lv_color_hex(0x0CA30C);
 const lv_color_t kWarning = lv_color_hex(0xFAB219);
 const lv_color_t kCritical = lv_color_hex(0xD03B3B);
 
-constexpr int kWiringWidth = 260;
-constexpr int kWiringHeight = 250;
+constexpr int kWiringHeight = 220;
 constexpr int kPinRadius = 10;
 constexpr int kWireLeft = 24;
 constexpr int kWireRight = 236;
 constexpr int kWireTop = 24;
-constexpr int kWireStep = 29;
+constexpr int kWireStep = 26;
 
 constexpr int kCalTargetX[4] = {30, 290, 30, 290};
 constexpr int kCalTargetY[4] = {80, 80, 400, 400};
@@ -122,6 +120,23 @@ std::size_t count_opens(const cable_test::Analysis& analysis) {
     return count;
 }
 
+// Kurze Variante fuer die grosse Verdikt-Zeile (die Web-UI nutzt die
+// ausfuehrlichen Labels aus report::kind_label_de).
+const char* short_kind_label(cable_test::CableKind kind) {
+    switch (kind) {
+    case cable_test::CableKind::Straight:
+        return "Geradekabel";
+    case cable_test::CableKind::Crossover:
+        return "Crossover";
+    case cable_test::CableKind::Custom:
+        return "Benutzerdef.";
+    case cable_test::CableKind::Faulty:
+        return "Fehlerhaft";
+    default:
+        return "Unbekannt";
+    }
+}
+
 } // namespace
 
 DisplayUi::DisplayUi(TestRunner& runner, MasterLink& link, const char* ap_ssid)
@@ -174,13 +189,9 @@ esp_err_t DisplayUi::init_lvgl() {
     lv_indev_set_display(indev_, display_);
     lv_indev_set_user_data(indev_, this);
     lv_indev_set_read_cb(indev_, touch_read_cb);
-    // Staerkere Bremsung nach einem Wisch: der Schwung laeuft nicht mehr
-    // sekundenlang weiter, wenn die Anzeige nur wenige Bilder pro Sekunde
-    // schafft. 10 % waere der LVGL-Standard.
-    lv_indev_set_scroll_throw(indev_, 30);
     // Standard waere LV_DEF_REFR_PERIOD (33 ms). Kuerzere Periode plus der
-    // manuelle Read nach jedem lv_timer_handler verarbeitet einen neuen Press
-    // schneller, insbesondere waehrend eines langen Scroll-Refreshs.
+    // manuelle Read nach jedem lv_timer_handler laesst Buttons und Seiten-
+    // wechsel auch nach einem langen Display-Frame schnell reagieren.
     lv_timer_t* read_timer = lv_indev_get_read_timer(indev_);
     if (read_timer != nullptr) {
         lv_timer_set_period(read_timer, 16);
@@ -212,8 +223,8 @@ void DisplayUi::task_loop() {
 
         // Ein waehrend des letzten Refreshs aufgesetzter Finger wird vom
         // Indev-Timer erst im naechsten Durchlauf gelesen. Direkt nach dem
-        // Refresh verarbeiten, damit der neue Press den Scroll-Nachlauf
-        // sofort beendet und die neue Bewegung uebernimmt.
+        // Refresh verarbeiten, damit Seiten-Buttons und Karten sofort
+        // reagieren, auch wenn der Frame lange gedauert hat.
         if (indev_ != nullptr) {
             lv_indev_read(indev_);
         }
@@ -288,6 +299,20 @@ lv_obj_t* DisplayUi::make_card_title(lv_obj_t* parent, const char* text) {
     return label;
 }
 
+lv_obj_t* DisplayUi::make_page(lv_obj_t* parent) {
+    lv_obj_t* page = lv_obj_create(parent);
+    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(page, 0, 0);
+    lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_set_style_pad_row(page, 8, 0);
+    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(page, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_set_scrollable(page, false);
+    return page;
+}
+
 void DisplayUi::build_ui() {
     lv_obj_t* screen = lv_screen_active();
     lv_obj_clean(screen);
@@ -296,19 +321,47 @@ void DisplayUi::build_ui() {
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_border_width(screen, 0, 0);
     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_flex_align(screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
     lv_obj_set_scrollable(screen, false);
 
-    // ---- header --------------------------------------------------------
+    build_header(screen);
+
+    page_host_ = lv_obj_create(screen);
+    lv_obj_set_width(page_host_, LV_PCT(100));
+    lv_obj_set_flex_grow(page_host_, 1);
+    lv_obj_set_style_bg_opa(page_host_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(page_host_, 0, 0);
+    lv_obj_set_style_pad_all(page_host_, 8, 0);
+    lv_obj_set_scrollable(page_host_, false);
+
+    pages_[kPageTest] = make_page(page_host_);
+    pages_[kPageResult] = make_page(page_host_);
+    pages_[kPageWiring] = make_page(page_host_);
+    pages_[kPageMatrix] = make_page(page_host_);
+
+    build_test_page(pages_[kPageTest]);
+    build_result_page(pages_[kPageResult]);
+    build_wiring_page(pages_[kPageWiring]);
+    build_matrix_page(pages_[kPageMatrix]);
+
+    build_nav(screen);
+
+    show_page(kPageTest);
+    show_matrix_view(false);
+    status_dirty_ = true;
+}
+
+void DisplayUi::build_header(lv_obj_t* screen) {
     lv_obj_t* header = lv_obj_create(screen);
     lv_obj_set_width(header, LV_PCT(100));
-    lv_obj_set_height(header, 100);
+    lv_obj_set_height(header, 90);
     lv_obj_set_style_bg_color(header, kSurface, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_set_style_pad_all(header, 10, 0);
-    lv_obj_set_style_pad_row(header, 6, 0);
+    lv_obj_set_style_pad_all(header, 8, 0);
+    lv_obj_set_style_pad_row(header, 4, 0);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START);
@@ -403,33 +456,56 @@ void DisplayUi::build_ui() {
     lv_label_set_text(ip_label, "192.168.4.1");
     lv_obj_set_style_text_font(ip_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(ip_label, kMuted, 0);
+}
 
-    // ---- scroll area ---------------------------------------------------
-    scroll_ = lv_obj_create(screen);
-    lv_obj_set_width(scroll_, LV_PCT(100));
-    lv_obj_set_flex_grow(scroll_, 1);
-    lv_obj_set_style_bg_opa(scroll_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(scroll_, 0, 0);
-    lv_obj_set_style_pad_all(scroll_, 12, 0);
-    lv_obj_set_style_pad_row(scroll_, 12, 0);
-    lv_obj_set_flex_flow(scroll_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(scroll_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_scroll_dir(scroll_, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(scroll_, LV_SCROLLBAR_MODE_OFF);
+void DisplayUi::build_nav(lv_obj_t* screen) {
+    nav_ = lv_obj_create(screen);
+    lv_obj_set_width(nav_, LV_PCT(100));
+    lv_obj_set_height(nav_, 56);
+    lv_obj_set_style_bg_color(nav_, kSurface, 0);
+    lv_obj_set_style_bg_opa(nav_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(nav_, 1, 0);
+    lv_obj_set_style_border_color(nav_, kHairline, 0);
+    lv_obj_set_style_border_side(nav_, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_radius(nav_, 0, 0);
+    lv_obj_set_style_pad_all(nav_, 6, 0);
+    lv_obj_set_style_pad_column(nav_, 4, 0);
+    lv_obj_set_flex_flow(nav_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(nav_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(nav_, false);
 
-    // ---- hero card -----------------------------------------------------
-    hero_card_ = make_card(scroll_);
+    static const char* const labels[kPageCount] = {"Test", "Ergebnis", "Kabel",
+                                                   "Matrix"};
+    for (int i = 0; i < kPageCount; ++i) {
+        tabs_[i].self = this;
+        tabs_[i].page = i;
+
+        lv_obj_t* button = lv_button_create(nav_);
+        lv_obj_set_height(button, 44);
+        lv_obj_set_flex_grow(button, 1);
+        lv_obj_set_style_radius(button, 8, 0);
+        lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_style_shadow_width(button, 0, 0);
+        lv_obj_add_event_cb(button, tab_button_cb, LV_EVENT_CLICKED, &tabs_[i]);
+        tabs_[i].button = button;
+
+        lv_obj_t* label = lv_label_create(button);
+        lv_label_set_text(label, labels[i]);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+        lv_obj_center(label);
+        tabs_[i].label = label;
+    }
+}
+
+void DisplayUi::build_test_page(lv_obj_t* page) {
+    hero_card_ = make_card(page);
     make_label(hero_card_, "KABELPRUEFUNG", &lv_font_montserrat_14, kMuted);
-    make_label(hero_card_, "Beide Enden einstecken, dann testen.",
-               kFont20, kInk);
+    make_label(hero_card_, "Beide Enden einstecken, dann testen.", kFont20, kInk);
     make_label(hero_card_,
-               "Der Slave misst am gegenueberliegenden Ende. Der Test dauert nur wenige "
-               "Sekunden.",
+               "Der Slave misst am Gegenende. Beide USB-Kabel am selben Host/Hub "
+               "anschliessen (gemeinsame Masse).",
                &lv_font_montserrat_14, kInk2);
-    make_label(hero_card_,
-               "Wichtig: gemeinsame Masse (beide USB-Kabel am selben Host/Hub).",
-               &lv_font_montserrat_14, kMuted);
 
     test_btn_ = lv_button_create(hero_card_);
     lv_obj_set_size(test_btn_, LV_PCT(100), 48);
@@ -457,28 +533,37 @@ void DisplayUi::build_ui() {
     lv_obj_set_style_pad_all(error_label_, 8, 0);
     lv_obj_set_hidden(error_label_, true);
 
-    // ---- result container ---------------------------------------------
-    result_container_ = lv_obj_create(scroll_);
-    lv_obj_set_width(result_container_, LV_PCT(100));
-    lv_obj_set_height(result_container_, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(result_container_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(result_container_, 0, 0);
-    lv_obj_set_style_pad_all(result_container_, 0, 0);
-    lv_obj_set_style_pad_row(result_container_, 12, 0);
-    lv_obj_set_flex_flow(result_container_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(result_container_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_scrollable(result_container_, false);
-    lv_obj_set_hidden(result_container_, true);
+    cal_btn_ = lv_button_create(page);
+    lv_obj_set_size(cal_btn_, LV_PCT(100), 40);
+    lv_obj_set_style_bg_color(cal_btn_, kSurface, 0);
+    lv_obj_set_style_bg_opa(cal_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(cal_btn_, 10, 0);
+    lv_obj_set_style_border_width(cal_btn_, 1, 0);
+    lv_obj_set_style_border_color(cal_btn_, kHairline, 0);
+    lv_obj_set_style_shadow_width(cal_btn_, 0, 0);
+    lv_obj_add_event_cb(cal_btn_, calibration_button_cb, LV_EVENT_CLICKED, this);
 
-    verdict_card_ = make_card(result_container_);
+    lv_obj_t* cal_label = lv_label_create(cal_btn_);
+    lv_label_set_text(cal_label, "Touch kalibrieren");
+    lv_obj_set_style_text_font(cal_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(cal_label, kMuted, 0);
+    lv_obj_center(cal_label);
+
+    footer_label_ = make_label(
+        page, "T568A und T568B sind elektrisch identisch. Nur spannungsfreie Kabel testen.",
+        &lv_font_montserrat_14, kMuted);
+}
+
+void DisplayUi::build_result_page(lv_obj_t* page) {
+    verdict_card_ = make_card(page);
+    lv_obj_set_style_pad_all(verdict_card_, 10, 0);
+    lv_obj_set_style_pad_column(verdict_card_, 10, 0);
     lv_obj_set_flex_flow(verdict_card_, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(verdict_card_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(verdict_card_, 12, 0);
 
     verdict_bar_ = lv_obj_create(verdict_card_);
-    lv_obj_set_size(verdict_bar_, 4, 56);
+    lv_obj_set_size(verdict_bar_, 4, 40);
     lv_obj_set_style_radius(verdict_bar_, 2, 0);
     lv_obj_set_style_bg_color(verdict_bar_, kMuted, 0);
     lv_obj_set_style_bg_opa(verdict_bar_, LV_OPA_COVER, 0);
@@ -486,8 +571,8 @@ void DisplayUi::build_ui() {
     lv_obj_set_scrollable(verdict_bar_, false);
 
     lv_obj_t* verdict_icon = lv_obj_create(verdict_card_);
-    lv_obj_set_size(verdict_icon, 48, 48);
-    lv_obj_set_style_radius(verdict_icon, 24, 0);
+    lv_obj_set_size(verdict_icon, 40, 40);
+    lv_obj_set_style_radius(verdict_icon, 20, 0);
     lv_obj_set_style_bg_color(verdict_icon, kSurface2, 0);
     lv_obj_set_style_bg_opa(verdict_icon, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(verdict_icon, 0, 0);
@@ -515,49 +600,22 @@ void DisplayUi::build_ui() {
     lv_obj_set_style_text_color(verdict_eyebrow, kMuted, 0);
 
     verdict_kind_ = lv_label_create(verdict_text);
-    lv_label_set_text(verdict_kind_, "-");
-    lv_label_set_long_mode(verdict_kind_, LV_LABEL_LONG_MODE_WRAP);
+    lv_label_set_text(verdict_kind_, "Noch kein Test");
+    lv_label_set_long_mode(verdict_kind_, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_width(verdict_kind_, LV_PCT(100));
     lv_obj_set_style_text_font(verdict_kind_, kFont28, 0);
     lv_obj_set_style_text_color(verdict_kind_, kInk, 0);
 
     verdict_detail_ = lv_label_create(verdict_text);
-    lv_label_set_text(verdict_detail_, "-");
+    lv_label_set_text(verdict_detail_, "Auf der Test-Seite ein Kabel pruefen.");
     lv_label_set_long_mode(verdict_detail_, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(verdict_detail_, LV_PCT(100));
     lv_obj_set_style_text_font(verdict_detail_, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(verdict_detail_, kInk2, 0);
 
-    // ---- wiring card ---------------------------------------------------
-    lv_obj_t* wiring_card = make_card(result_container_);
-    make_card_title(wiring_card, "Verdrahtung");
-    wiring_area_ = lv_obj_create(wiring_card);
-    lv_obj_set_width(wiring_area_, LV_PCT(100));
-    lv_obj_set_height(wiring_area_, kWiringHeight);
-    lv_obj_set_style_bg_opa(wiring_area_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(wiring_area_, 0, 0);
-    lv_obj_set_style_pad_all(wiring_area_, 0, 0);
-    lv_obj_set_scrollable(wiring_area_, false);
-    make_label(wiring_card,
-               "Durchgezogen = Verbindung / gestrichelt = offen / gelb = Kurzschluss",
-               &lv_font_montserrat_14, kMuted);
+    lv_obj_t* diag_card = make_card(page);
+    make_card_title(diag_card, "Diagnose & Laengen (ca.)");
 
-    // ---- matrix card ---------------------------------------------------
-    lv_obj_t* matrix_card = make_card(result_container_);
-    make_card_title(matrix_card, "Messmatrix");
-    matrix_area_ = lv_obj_create(matrix_card);
-    lv_obj_set_width(matrix_area_, LV_PCT(100));
-    lv_obj_set_height(matrix_area_, 212);
-    lv_obj_set_style_bg_opa(matrix_area_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(matrix_area_, 0, 0);
-    lv_obj_set_style_pad_all(matrix_area_, 0, 0);
-    lv_obj_set_scrollable(matrix_area_, false);
-    make_label(matrix_card, "Zeile: getriebene Ader A / Spalte: HIGH an B",
-               &lv_font_montserrat_14, kMuted);
-
-    // ---- diagnosis card ------------------------------------------------
-    lv_obj_t* diag_card = make_card(result_container_);
-    make_card_title(diag_card, "Diagnose");
     diag_area_ = lv_obj_create(diag_card);
     lv_obj_set_width(diag_area_, LV_PCT(100));
     lv_obj_set_height(diag_area_, LV_SIZE_CONTENT);
@@ -567,51 +625,151 @@ void DisplayUi::build_ui() {
     lv_obj_set_style_pad_row(diag_area_, 6, 0);
     lv_obj_set_flex_flow(diag_area_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollable(diag_area_, false);
+    make_label(diag_area_, "Nach dem Test erscheinen hier die Messwerte.",
+               &lv_font_montserrat_14, kMuted);
 
-    // ---- lengths card --------------------------------------------------
-    lv_obj_t* length_card = make_card(result_container_);
-    make_card_title(length_card, "Laengen (experimentell)");
-    length_area_ = lv_obj_create(length_card);
+    length_area_ = lv_obj_create(diag_card);
     lv_obj_set_width(length_area_, LV_PCT(100));
     lv_obj_set_height(length_area_, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(length_area_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(length_area_, 0, 0);
     lv_obj_set_style_pad_all(length_area_, 0, 0);
     lv_obj_set_style_pad_row(length_area_, 4, 0);
-    lv_obj_set_flex_flow(length_area_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_column(length_area_, 8, 0);
     lv_obj_set_scrollable(length_area_, false);
-    make_label(length_card,
-               "Schaetzung ueber die Leitungskapazitaet; +/-20-30 %. Nur bei sauberer "
-               "Verdrahtung.",
+}
+
+void DisplayUi::build_wiring_page(lv_obj_t* page) {
+    lv_obj_t* wiring_card = make_card(page);
+    lv_obj_set_style_pad_all(wiring_card, 10, 0);
+    lv_obj_set_style_pad_row(wiring_card, 6, 0);
+    make_card_title(wiring_card, "Verdrahtung");
+
+    wiring_area_ = lv_obj_create(wiring_card);
+    lv_obj_set_width(wiring_area_, LV_PCT(100));
+    lv_obj_set_height(wiring_area_, kWiringHeight);
+    lv_obj_set_style_bg_opa(wiring_area_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(wiring_area_, 0, 0);
+    lv_obj_set_style_pad_all(wiring_area_, 0, 0);
+    lv_obj_set_scrollable(wiring_area_, false);
+
+    make_label(wiring_card,
+               "Durchgezogen = verbunden, gestrichelt = offen, gelb = Kurzschluss",
                &lv_font_montserrat_14, kMuted);
+}
 
-    // ---- raw data card -------------------------------------------------
-    lv_obj_t* raw_card = make_card(result_container_);
-    make_card_title(raw_card, "Rohdaten");
-    raw_label_ = make_label(raw_card, "", &lv_font_montserrat_14, kMuted);
+void DisplayUi::build_matrix_page(lv_obj_t* page) {
+    lv_obj_t* view_bar = lv_obj_create(page);
+    lv_obj_set_width(view_bar, LV_PCT(100));
+    lv_obj_set_height(view_bar, 34);
+    lv_obj_set_style_bg_color(view_bar, kSurface, 0);
+    lv_obj_set_style_bg_opa(view_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(view_bar, 8, 0);
+    lv_obj_set_style_border_width(view_bar, 0, 0);
+    lv_obj_set_style_pad_all(view_bar, 2, 0);
+    lv_obj_set_style_pad_column(view_bar, 4, 0);
+    lv_obj_set_flex_flow(view_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(view_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollable(view_bar, false);
 
-    // ---- calibration button -------------------------------------------
-    lv_obj_t* cal_btn = lv_button_create(scroll_);
-    lv_obj_set_size(cal_btn, LV_PCT(100), 40);
-    lv_obj_set_style_bg_color(cal_btn, kSurface, 0);
-    lv_obj_set_style_bg_opa(cal_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(cal_btn, 10, 0);
-    lv_obj_set_style_border_width(cal_btn, 1, 0);
-    lv_obj_set_style_border_color(cal_btn, kHairline, 0);
-    lv_obj_set_style_shadow_width(cal_btn, 0, 0);
-    lv_obj_add_event_cb(cal_btn, calibration_button_cb, LV_EVENT_CLICKED, this);
+    const auto make_toggle = [&](ViewToggle& toggle, bool raw, const char* text) {
+        toggle.self = this;
+        toggle.raw = raw;
 
-    lv_obj_t* cal_label = lv_label_create(cal_btn);
-    lv_label_set_text(cal_label, "Touch kalibrieren");
-    lv_obj_set_style_text_font(cal_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(cal_label, kMuted, 0);
-    lv_obj_center(cal_label);
+        lv_obj_t* button = lv_button_create(view_bar);
+        lv_obj_set_height(button, 30);
+        lv_obj_set_flex_grow(button, 1);
+        lv_obj_set_style_radius(button, 6, 0);
+        lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_style_shadow_width(button, 0, 0);
+        lv_obj_add_event_cb(button, view_toggle_cb, LV_EVENT_CLICKED, &toggle);
+        toggle.button = button;
 
-    // ---- footer note ---------------------------------------------------
-    make_label(scroll_,
-               "T568A und T568B sind elektrisch identisch. Nur spannungsfreie Kabel testen.",
-               &lv_font_montserrat_14, kMuted);
-    status_dirty_ = true;
+        lv_obj_t* label = lv_label_create(button);
+        lv_label_set_text(label, text);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+        lv_obj_center(label);
+        toggle.label = label;
+    };
+    make_toggle(matrix_toggle_, false, "Matrix");
+    make_toggle(raw_toggle_, true, "Rohdaten");
+
+    matrix_card_ = make_card(page);
+    make_card_title(matrix_card_, "Messmatrix");
+    matrix_area_ = lv_obj_create(matrix_card_);
+    lv_obj_set_width(matrix_area_, LV_PCT(100));
+    lv_obj_set_height(matrix_area_, 188);
+    lv_obj_set_style_bg_opa(matrix_area_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(matrix_area_, 0, 0);
+    lv_obj_set_style_pad_all(matrix_area_, 0, 0);
+    lv_obj_set_scrollable(matrix_area_, false);
+    make_label(matrix_card_, "Zeile: A-Ader, Spalte: B-Ader", &lv_font_montserrat_14,
+               kMuted);
+
+    raw_card_ = make_card(page);
+    make_card_title(raw_card_, "Rohdaten");
+    raw_label_ = make_label(raw_card_, "", &lv_font_montserrat_14, kMuted);
+}
+
+void DisplayUi::show_page(int page) {
+    if (page < 0 || page >= kPageCount) {
+        return;
+    }
+    active_page_ = page;
+
+    for (int i = 0; i < kPageCount; ++i) {
+        if (pages_[i] != nullptr) {
+            lv_obj_set_hidden(pages_[i], i != page);
+        }
+
+        const bool active = (i == page);
+        if (tabs_[i].button != nullptr) {
+            lv_obj_set_style_bg_color(tabs_[i].button, kAccentSolid, 0);
+            lv_obj_set_style_bg_opa(tabs_[i].button,
+                                    active ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        }
+        if (tabs_[i].label != nullptr) {
+            lv_obj_set_style_text_color(tabs_[i].label, active ? kInk : kMuted, 0);
+        }
+    }
+}
+
+void DisplayUi::show_matrix_view(bool raw) {
+    matrix_show_raw_ = raw;
+    if (matrix_card_ != nullptr) {
+        lv_obj_set_hidden(matrix_card_, raw);
+    }
+    if (raw_card_ != nullptr) {
+        lv_obj_set_hidden(raw_card_, !raw);
+    }
+
+    const auto style_toggle = [](const ViewToggle& toggle, bool active) {
+        if (toggle.button != nullptr) {
+            lv_obj_set_style_bg_color(toggle.button, kSurface2, 0);
+            lv_obj_set_style_bg_opa(toggle.button,
+                                    active ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        }
+        if (toggle.label != nullptr) {
+            lv_obj_set_style_text_color(toggle.label, active ? kInk : kMuted, 0);
+        }
+    };
+    style_toggle(matrix_toggle_, !raw);
+    style_toggle(raw_toggle_, raw);
+}
+
+void DisplayUi::tab_button_cb(lv_event_t* event) {
+    auto* tab = static_cast<TabButton*>(lv_event_get_user_data(event));
+    if (tab != nullptr && tab->self != nullptr) {
+        tab->self->show_page(tab->page);
+    }
+}
+
+void DisplayUi::view_toggle_cb(lv_event_t* event) {
+    auto* toggle = static_cast<ViewToggle*>(lv_event_get_user_data(event));
+    if (toggle != nullptr && toggle->self != nullptr) {
+        toggle->self->show_matrix_view(toggle->raw);
+    }
 }
 
 void DisplayUi::update_status() {
@@ -657,6 +815,7 @@ void DisplayUi::refresh_result() {
     }
     result_generation_ = generation;
     apply_result(fresh);
+    show_page(kPageResult);
 }
 
 void DisplayUi::run_requested_test() {
@@ -681,6 +840,7 @@ void DisplayUi::run_requested_test() {
         } else {
             apply_result(fresh);
         }
+        show_page(kPageResult);
     } else {
         char message[80];
         if (err == ESP_ERR_INVALID_STATE) {
@@ -716,7 +876,7 @@ void DisplayUi::apply_result(const TestResult& result) {
     lv_obj_set_style_bg_color(verdict_bar_, color, 0);
     lv_obj_set_style_text_color(verdict_icon_label_, color, 0);
     lv_label_set_text(verdict_icon_label_, kind_icon(kind));
-    lv_label_set_text(verdict_kind_, report::kind_label_de(kind));
+    lv_label_set_text(verdict_kind_, short_kind_label(kind));
 
     const std::size_t shorts = count_shorts(result.analysis);
     const std::size_t opens = count_opens(result.analysis);
@@ -751,22 +911,31 @@ void DisplayUi::apply_result(const TestResult& result) {
     rebuild_diagnostics();
     rebuild_lengths();
     rebuild_raw();
-
-    lv_obj_set_hidden(result_container_, false);
-    lv_obj_update_layout(scroll_);
-    lv_obj_scroll_to_view(verdict_card_, LV_ANIM_ON);
 }
 
 void DisplayUi::show_error(const char* message) {
     lv_label_set_text(error_label_, message);
     lv_obj_set_hidden(error_label_, false);
-    lv_obj_update_layout(scroll_);
-    lv_obj_scroll_to_view(hero_card_, LV_ANIM_ON);
+    // Bei sichtbarer Fehlermeldung braucht die Test-Seite den Platz fuer
+    // Kalibrier-Button und Fussnote nicht mehr.
+    if (cal_btn_ != nullptr) {
+        lv_obj_set_hidden(cal_btn_, true);
+    }
+    if (footer_label_ != nullptr) {
+        lv_obj_set_hidden(footer_label_, true);
+    }
+    show_page(kPageTest);
 }
 
 void DisplayUi::hide_error() {
     lv_label_set_text(error_label_, "");
     lv_obj_set_hidden(error_label_, true);
+    if (cal_btn_ != nullptr) {
+        lv_obj_set_hidden(cal_btn_, false);
+    }
+    if (footer_label_ != nullptr) {
+        lv_obj_set_hidden(footer_label_, false);
+    }
 }
 
 void DisplayUi::rebuild_wiring() {
@@ -893,13 +1062,13 @@ void DisplayUi::rebuild_wiring() {
 void DisplayUi::rebuild_matrix() {
     lv_obj_clean(matrix_area_);
 
-    static const int32_t col_dsc[] = {36, 24, 24, 24, 24, 24, 24, 24, 24,
+    static const int32_t col_dsc[] = {36, 21, 21, 21, 21, 21, 21, 21, 21,
                                       LV_GRID_TEMPLATE_LAST};
-    static const int32_t row_dsc[] = {20, 24, 24, 24, 24, 24, 24, 24, 24,
+    static const int32_t row_dsc[] = {20, 21, 21, 21, 21, 21, 21, 21, 21,
                                       LV_GRID_TEMPLATE_LAST};
 
     lv_obj_t* grid = lv_obj_create(matrix_area_);
-    lv_obj_set_size(grid, 36 + 8 * 24, 20 + 8 * 24);
+    lv_obj_set_size(grid, 36 + 8 * 21, 20 + 8 * 21);
     lv_obj_set_layout(grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
@@ -985,14 +1154,14 @@ void DisplayUi::add_diag_row(lv_obj_t* parent, const char* icon, lv_color_t icon
 
     lv_obj_t* name_label = lv_label_create(row);
     lv_label_set_text(name_label, name);
-    lv_obj_set_width(name_label, 108);
+    lv_obj_set_width(name_label, 106);
     lv_obj_set_style_text_font(name_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(name_label, kMuted, 0);
 
     lv_obj_t* value_label = lv_label_create(row);
     lv_label_set_text(value_label, value);
     lv_obj_set_flex_grow(value_label, 1);
-    lv_label_set_long_mode(value_label, LV_LABEL_LONG_MODE_WRAP);
+    lv_label_set_long_mode(value_label, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_text_font(value_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(value_label, value_color, 0);
 }
@@ -1005,15 +1174,11 @@ void DisplayUi::rebuild_diagnostics() {
     const std::string shorts_text = short_list(result_.analysis);
     const std::string opens_text = open_list(result_.analysis);
 
-    add_diag_row(diag_area_, kind_icon(result_.analysis.kind),
-                 kind_color(result_.analysis.kind), "Kabeltyp",
-                 report::kind_label_de(result_.analysis.kind),
-                 kind_color(result_.analysis.kind));
     add_diag_row(diag_area_, shorts == 0 ? "OK" : "!", shorts == 0 ? kGood : kWarning,
-                 "Kurzschluesse", shorts_text.c_str(),
+                 "Kurzschl.", shorts_text.c_str(),
                  shorts == 0 ? kGood : kWarning);
     add_diag_row(diag_area_, opens == 0 ? "OK" : "X", opens == 0 ? kGood : kCritical,
-                 "Unterbrechungen", opens_text.c_str(),
+                 "Offen", opens_text.c_str(),
                  opens == 0 ? kGood : kCritical);
     add_diag_row(diag_area_, result_.analysis.idle_activity ? "!" : "OK",
                  result_.analysis.idle_activity ? kCritical : kGood, "Fremdspannung",
@@ -1024,46 +1189,42 @@ void DisplayUi::rebuild_diagnostics() {
 void DisplayUi::rebuild_lengths() {
     lv_obj_clean(length_area_);
 
+    static const int32_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1),
+                                      LV_GRID_TEMPLATE_LAST};
+    static const int32_t row_dsc[] = {LV_GRID_CONTENT, LV_GRID_CONTENT,
+                                      LV_GRID_TEMPLATE_LAST};
+    lv_obj_set_layout(length_area_, LV_LAYOUT_GRID);
+    lv_obj_set_grid_dsc_array(length_area_, col_dsc, row_dsc);
+
     static constexpr std::array<std::array<std::size_t, 2>, 4> pairs = {{
         {0, 1}, {2, 5}, {3, 4}, {6, 7}}};
 
-    bool any = false;
+    int slot = 0;
     for (const auto& pair : pairs) {
         const auto a = result_.data.length_m[pair[0]];
         const auto b = result_.data.length_m[pair[1]];
         if (!a && !b) {
             continue;
         }
-        any = true;
         const double meters = a && b ? (*a + *b) / 2.0 : (a ? *a : *b);
 
-        lv_obj_t* row = lv_obj_create(length_area_);
-        lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_scrollable(row, false);
-
-        lv_obj_t* name = lv_label_create(row);
-        lv_label_set_text_fmt(name, "Paar %zu-%zu", pair[0] + 1, pair[1] + 1);
-        lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(name, kMuted, 0);
-
-        lv_obj_t* value = lv_label_create(row);
-        lv_label_set_text_fmt(value, "%.1f m", meters);
+        lv_obj_t* value = lv_label_create(length_area_);
+        lv_label_set_text_fmt(value, "%zu-%zu  %.1f m", pair[0] + 1, pair[1] + 1,
+                              meters);
         lv_obj_set_style_text_font(value, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(value, kInk, 0);
+        lv_obj_set_style_text_color(value, kInk2, 0);
+        lv_obj_set_grid_cell(value, LV_GRID_ALIGN_START, slot % 2, 1,
+                             LV_GRID_ALIGN_CENTER, slot / 2, 1);
+        ++slot;
     }
 
-    if (!any) {
+    if (slot == 0) {
         lv_obj_t* empty = lv_label_create(length_area_);
         lv_label_set_text(empty, "Keine Messwerte");
         lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(empty, kMuted, 0);
+        lv_obj_set_grid_cell(empty, LV_GRID_ALIGN_START, 0, 2, LV_GRID_ALIGN_CENTER,
+                             0, 1);
     }
 }
 
@@ -1134,17 +1295,7 @@ void DisplayUi::touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
-
     self->read_touch(data);
-
-    // Verifikation: neuer Press, waehrend LVGL noch einen Scroll-Nachlauf
-    // offen hat. LVGL stoppt ihn anschliessend in indev_proc_press.
-    if (data->state == LV_INDEV_STATE_PRESSED &&
-        self->last_touch_state_ != LV_INDEV_STATE_PRESSED &&
-        lv_indev_get_scroll_obj(indev) != nullptr) {
-        ESP_LOGI(kTag, "Touch beendet Scroll-Nachlauf");
-    }
-    self->last_touch_state_ = data->state;
 }
 
 void DisplayUi::read_touch(lv_indev_data_t* data) {

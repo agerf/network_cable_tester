@@ -400,9 +400,9 @@ Auf diesem Rechner liegt VS Code unter
 1. Beide Tester mit gemeinsamer Masse mit Strom versorgen.
 2. Das zu prüfende Kabel zwischen die beiden RJ45-Buchsen stecken.
 3. Beim ersten Start am Display die vier Kreuze antippen (Touch-Kalibrierung).
-   Danach im Display auf **Kabel testen** tippen; die Ergebniskarten
-   (Verdrahtung, Matrix, Diagnose, Längen, Rohdaten) erscheinen und lassen
-   sich scrollen.
+   Danach im Display auf **Kabel testen** tippen; die Ergebnisse erscheinen
+   auf den Seiten **Ergebnis**, **Kabel** und **Matrix** (unten umschaltbar,
+   kein Scrollen nötig).
 4. Alternativ mit dem WLAN **`CableTester`** verbinden (Passwort
    **`cabletest123`**), <http://192.168.4.1/> öffnen, oben muss „Slave
    verbunden“ stehen; dann **Kabel testen** drücken.
@@ -424,12 +424,16 @@ grafische Oberfläche mit LVGL, angelehnt an die Web-UI:
 
 - **Kopfzeile:** „Kabeltester“, Node/SSID, Status-Chip (verbunden/getrennt/
   Test läuft), RSSI und AP-IP
-- **Hero-Karte:** Hinweis zum Testen und großer Button **„Kabel testen“**
-- **Ergebniskarten:** Verdrahtungsgrafik A→B, Messmatrix, Diagnose, Längen
-  (experimentell) und Rohdaten – mit denselben Farben wie die Web-UI
-  (grün = gut, gelb = Warnung, rot = Fehler)
-- **Touch-Bedienung:** Buttons und Scrollen; die Koordinaten werden über den
-  XPT2046 gelesen
+- **Test-Seite:** Hinweis zum Testen, großer Button **„Kabel testen“** und
+  der Button **„Touch kalibrieren“**
+- **Ergebnis-Seite:** Verdikt, Diagnose (Kurzschlüsse, offene Adern,
+  Fremdspannung) und Längen (experimentell) – mit denselben Farben wie die
+  Web-UI (grün = gut, gelb = Warnung, rot = Fehler)
+- **Kabel-Seite:** Verdrahtungsgrafik A→B
+- **Matrix-Seite:** Messmatrix; über **„Rohdaten“** lassen sich die Rohwerte
+  einblenden
+- **Touch-Bedienung:** vier große Tabs am unteren Rand; die Seiten wechseln
+  ohne Scrollen. Die Koordinaten werden über den XPT2046 gelesen.
 
 **Erste Inbetriebnahme / Kalibrierung:** Beim ersten Start (oder nach
 `touchcal`) erscheinen vier Kreuze. Jedes Kreuz antippen und wieder loslassen;

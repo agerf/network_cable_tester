@@ -113,9 +113,10 @@ warning-free.
   XPT2046 X/Y readings (2 MHz) with `T_IRQ` as a fast hint. First boot runs a
   four-point calibration stored in NVS namespace `touch_cal` (`touchcal`
   console command resets it). The display task polls
-  `TestRunner::last_result()`, shows header/hero/result cards (verdict,
-  wiring, matrix, diagnosis, lengths, raw), and runs a test synchronously from
-  the "Kabel testen" button. LVGL is fetched via the component manager
+  `TestRunner::last_result()` and shows four fixed pages (Test, Ergebnis,
+  Kabel, Matrix/Roh) with a bottom tab bar instead of scrolling; it runs a
+  test synchronously from the "Kabel testen" button and switches to the
+  result page afterwards. LVGL is fetched via the component manager
   (`components/display_ui/idf_component.yml`); `managed_components/` is
   git-ignored, `dependencies.lock` is tracked. Sources are guarded by
   `CONFIG_CABLE_TESTER_ROLE_MASTER && CONFIG_IDF_TARGET_ESP32S3`; the
