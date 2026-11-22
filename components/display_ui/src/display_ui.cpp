@@ -1209,8 +1209,12 @@ void DisplayUi::rebuild_lengths() {
         const double meters = a && b ? (*a + *b) / 2.0 : (a ? *a : *b);
 
         lv_obj_t* value = lv_label_create(length_area_);
-        lv_label_set_text_fmt(value, "%zu-%zu  %.1f m", pair[0] + 1, pair[1] + 1,
-                              meters);
+        // std::snprintf statt lv_label_set_text_fmt: LVGL ist ohne
+        // CONFIG_LV_USE_FLOAT gebaut und kann %.1f nicht formatieren.
+        char text[32];
+        std::snprintf(text, sizeof(text), "%zu-%zu  %.1f m", pair[0] + 1,
+                      pair[1] + 1, meters);
+        lv_label_set_text(value, text);
         lv_obj_set_style_text_font(value, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(value, kInk2, 0);
         lv_obj_set_grid_cell(value, LV_GRID_ALIGN_START, slot % 2, 1,
