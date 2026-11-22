@@ -125,7 +125,7 @@ std::size_t count_opens(const cable_test::Analysis& analysis) {
 const char* short_kind_label(cable_test::CableKind kind) {
     switch (kind) {
     case cable_test::CableKind::Straight:
-        return "Geradekabel";
+        return "Patchkabel";
     case cable_test::CableKind::Crossover:
         return "Crossover";
     case cable_test::CableKind::Custom:
